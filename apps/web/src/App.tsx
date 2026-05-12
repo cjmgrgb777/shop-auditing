@@ -39,6 +39,16 @@ import {
   DialogDescription 
 } from "@/components/ui/dialog";
 
+import { 
+  ResponsiveContainer, 
+  AreaChart, 
+  Area, 
+  XAxis, 
+  YAxis, 
+  Tooltip,
+  CartesianGrid 
+} from 'recharts';
+
 const apiUrl = 'http://localhost:3001';
 
 type View = 'home' | 'logins' | 'purchases';
@@ -47,6 +57,7 @@ interface Patient {
   email: string;
   allowance: number;
   login_time: string;
+  hasPurchased?: boolean;
 }
 
 interface Purchase {
@@ -90,12 +101,36 @@ function App() {
         if (currentLoginTab === 'allowance') {
           params += '&withAllowance=true';
         }
+        
+        // Fetch both patients and purchases to cross-reference
+        const [patientsRes, purchasesRes] = await Promise.all([
+          axios.get(`${apiUrl}/api/patients?${params}`),
+          axios.get(`${apiUrl}/api/purchases?date=${targetDate}`)
+        ]);
+        
+        const purchases = purchasesRes.data;
+        const paidEmails = new Set(
+          purchases
+            .filter((p: any) => p.payment_status === 'FULLY_CHARGED')
+            .map((p: any) => p.email.toLowerCase())
+        );
+        
+        const patientsWithPurchaseInfo = patientsRes.data.map((patient: any) => {
+          // Normalize emails for matching (handle [at] and @)
+          const patientEmail = patient.email.toLowerCase().replace('[at]', '@');
+          return {
+            ...patient,
+            hasPurchased: paidEmails.has(patientEmail)
+          };
+        });
+        
+        setData(patientsWithPurchaseInfo);
       } else {
         endpoint = 'purchases';
+        const response = await axios.get(`${apiUrl}/api/${endpoint}?${params}`);
+        setData(response.data);
       }
 
-      const response = await axios.get(`${apiUrl}/api/${endpoint}?${params}`);
-      setData(response.data);
       // Reset sort to default when fetching new data
       setSortConfig({ key: view === 'logins' ? 'login_time' : 'purchase_time', direction: 'desc' });
     } catch (err) {
@@ -171,10 +206,10 @@ function App() {
   };
 
   const handleExport = () => {
-    if (sortedData.length === 0) return;
+    if (filteredData.length === 0) return;
 
     const headers = activeView === 'logins' 
-      ? ['Email', 'Allowance Remaining', 'Login Time'] 
+      ? ['Email', 'Allowance Remaining', 'Login Time', 'Purchased Today'] 
       : ['Email', 'Total', 'Currency', 'Status', 'Purchase Time'];
 
     const csvContent = [
@@ -184,7 +219,8 @@ function App() {
           return [
             item.email,
             item.allowance,
-            format(new Date(item.login_time), 'yyyy-MM-dd HH:mm:ss')
+            format(new Date(item.login_time), 'yyyy-MM-dd HH:mm:ss'),
+            item.hasPurchased ? 'YES' : 'NO'
           ].join(',');
         } else {
           return [
@@ -343,7 +379,15 @@ function App() {
                 <div className="h-8 w-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-500 group-hover:bg-primary/10 group-hover:text-primary transition-colors">
                   <User size={14} />
                 </div>
-                {patient.email}
+                <div className="flex flex-col">
+                  <span>{patient.email}</span>
+                  {patient.hasPurchased && (
+                    <span className="inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-700 w-fit mt-1">
+                      <ShoppingCart size={10} className="mr-1" />
+                      PURCHASED TODAY
+                    </span>
+                  )}
+                </div>
               </div>
             </TableCell>
             <TableCell>
@@ -523,6 +567,118 @@ function App() {
                 </div>
               );
             })()}
+
+            {!loading && data.length > 0 && activeView === 'purchases' && (
+              <div className="grid gap-6 md:grid-cols-3">
+                <Card className="md:col-span-2 bg-white shadow-sm border-slate-200">
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-sm font-bold flex items-center gap-2">
+                      <TrendingUp className="h-4 w-4 text-primary" />
+                      Traffic Frequency (Hourly Distribution)
+                    </CardTitle>
+                    <CardDescription>Visualizing {activeView === 'logins' ? 'logins' : 'purchases'} across the day</CardDescription>
+                  </CardHeader>
+                  <CardContent className="h-[200px] pt-4">
+                    {(() => {
+                      const timeKey = activeView === 'logins' ? 'login_time' : 'purchase_time';
+                      const hours = Array.from({ length: 24 }, (_, i) => ({
+                        hour: `${i}:00`,
+                        count: 0
+                      }));
+                      data.forEach(item => {
+                        const date = new Date(item[timeKey]);
+                        const hour = date.getHours();
+                        if (!isNaN(hour) && hours[hour]) {
+                          hours[hour].count++;
+                        }
+                      });
+                      return (
+                        <ResponsiveContainer width="100%" height="100%">
+                          <AreaChart data={hours}>
+                            <defs>
+                              <linearGradient id="colorCount" x1="0" y1="0" x2="0" y2="1">
+                                <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.3}/>
+                                <stop offset="95%" stopColor="#3b82f6" stopOpacity={0}/>
+                              </linearGradient>
+                            </defs>
+                            <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                            <XAxis 
+                              dataKey="hour" 
+                              fontSize={10} 
+                              tickLine={false} 
+                              axisLine={false}
+                              interval={3}
+                            />
+                            <YAxis fontSize={10} tickLine={false} axisLine={false} />
+                            <Tooltip 
+                              contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}
+                            />
+                            <Area 
+                              type="monotone" 
+                              dataKey="count" 
+                              stroke="#3b82f6" 
+                              fillOpacity={1} 
+                              fill="url(#colorCount)" 
+                              strokeWidth={2}
+                            />
+                          </AreaChart>
+                        </ResponsiveContainer>
+                      );
+                    })()}
+                  </CardContent>
+                </Card>
+
+                <div className="space-y-4">
+                  <Card className="bg-white shadow-sm border-slate-200">
+                    <CardHeader className="p-4 pb-2">
+                      <CardDescription className="text-[10px] font-bold uppercase">Avg. Frequency</CardDescription>
+                    </CardHeader>
+                    <CardContent className="p-4 pt-0">
+                      {(() => {
+                        const timeKey = activeView === 'logins' ? 'login_time' : 'purchase_time';
+                        const sorted = [...data].map(i => new Date(i[timeKey]).getTime()).sort();
+                        if (sorted.length < 2) return <p className="text-xl font-bold">N/A</p>;
+                        const totalRange = sorted[sorted.length - 1] - sorted[0];
+                        const avg = totalRange / (data.length - 1);
+                        const mins = Math.round(avg / 60000);
+                        return (
+                          <div>
+                            <p className="text-2xl font-black text-slate-900">
+                              {mins < 1 ? '< 1 min' : `${mins} mins`}
+                            </p>
+                            <p className="text-[10px] text-muted-foreground italic">average time between events</p>
+                          </div>
+                        );
+                      })()}
+                    </CardContent>
+                  </Card>
+
+                  <Card className="bg-white shadow-sm border-slate-200">
+                    <CardHeader className="p-4 pb-2">
+                      <CardDescription className="text-[10px] font-bold uppercase">Peak Traffic</CardDescription>
+                    </CardHeader>
+                    <CardContent className="p-4 pt-0">
+                      {(() => {
+                        const timeKey = activeView === 'logins' ? 'login_time' : 'purchase_time';
+                        const counts: Record<number, number> = {};
+                        data.forEach(item => {
+                          const h = new Date(item[timeKey]).getHours();
+                          counts[h] = (counts[h] || 0) + 1;
+                        });
+                        const peak = Object.entries(counts).sort((a, b) => b[1] - a[1])[0];
+                        if (!peak) return <p className="text-xl font-bold">N/A</p>;
+                        return (
+                          <div>
+                            <p className="text-2xl font-black text-slate-900">{peak[0]}:00 - {parseInt(peak[0])+1}:00</p>
+                            <p className="text-[10px] text-muted-foreground italic">with {peak[1]} total events</p>
+                          </div>
+                        );
+                      })()}
+                    </CardContent>
+                  </Card>
+                </div>
+              </div>
+            )}
             
             <Card className="bg-white shadow-md border-slate-200/60 overflow-hidden animate-in fade-in zoom-in-95 duration-300">
             <CardHeader className="border-b bg-slate-50/50">
