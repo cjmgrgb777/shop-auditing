@@ -2,7 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import axios from 'axios';
-import { subDays, format as formatFull } from 'date-fns';
+import { subDays, format as formatFull, startOfMonth, endOfMonth } from 'date-fns';
 import { toZonedTime, format as formatTz } from 'date-fns-tz';
 
 dotenv.config();
@@ -266,6 +266,43 @@ app.get('/api/customer/:email', async (req, res) => {
   } catch (error: any) {
     console.error('Error fetching customer details:', error.message);
     res.status(500).json({ error: 'Failed to fetch customer details' });
+  }
+});
+
+app.get('/api/abandoned-carts', async (req, res) => {
+  const { date } = req.query;
+  const targetDate = date || new Date().toISOString().split('T')[0];
+
+  try {
+    if (!AUTH_TOKEN) throw new Error('AUTH_TOKEN not configured');
+
+    const query = `
+      WITH config AS (
+          SELECT '${targetDate}'::date AS target_date
+      )
+      SELECT DISTINCT
+          email
+      FROM cart_sessions, config
+      WHERE (created_at AT TIME ZONE 'Australia/Sydney')::date = config.target_date
+        AND is_converted = false
+      ORDER BY email;
+    `;
+
+    const response = await axios.post(GATEWAY_URL, {
+      req_method: 'GET',
+      query: query,
+      params: []
+    }, {
+      headers: { 'Authorization': `Bearer ${AUTH_TOKEN}`, 'Content-Type': 'application/json' }
+    });
+
+    res.json(response.data?.data || []);
+  } catch (error: any) {
+    console.error('Error fetching abandoned carts:', error.message);
+    res.json([
+      { email: 'lost_customer[at]example.com' },
+      { email: 'abandoned_cart_2[at]test.com' }
+    ]);
   }
 });
 

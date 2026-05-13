@@ -57,7 +57,7 @@ import {
 
 const apiUrl = 'http://localhost:3001';
 
-type View = 'home' | 'logins' | 'purchases' | 'funnel';
+type View = 'home' | 'logins' | 'purchases' | 'funnel' | 'abandoned';
 
 interface Patient {
   email: string;
@@ -95,7 +95,9 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   const [sortConfig, setSortConfig] = useState<{ key: string, direction: 'asc' | 'desc' }>({ key: 'purchase_time', direction: 'desc' });
   const [searchQuery, setSearchQuery] = useState('');
+  const [chartMetric, setChartMetric] = useState<'traffic' | 'gross'>('traffic');
   const [yesterdayTotal, setYesterdayTotal] = useState<number | null>(null);
+  const [yesterdayData, setYesterdayData] = useState<any[]>([]);
   
   // Customer details state
   const [selectedCustomer, setSelectedCustomer] = useState<any | null>(null);
@@ -145,6 +147,10 @@ function App() {
         endpoint = 'funnel';
         const response = await axios.get(`${apiUrl}/api/${endpoint}?${params}`);
         setData(response.data);
+      } else if (view === 'abandoned') {
+        endpoint = 'abandoned-carts';
+        const response = await axios.get(`${apiUrl}/api/${endpoint}?${params}`);
+        setData(response.data);
       } else {
         endpoint = 'purchases';
         const [todayRes, yesterdayRes] = await Promise.all([
@@ -153,6 +159,7 @@ function App() {
         ]);
         
         setData(todayRes.data);
+        setYesterdayData(yesterdayRes.data);
         const yTotal = yesterdayRes.data
           .filter((i: any) => i.payment_status === 'FULLY_CHARGED')
           .reduce((acc: number, i: any) => acc + Number(i.total), 0);
@@ -237,8 +244,12 @@ function App() {
     if (filteredData.length === 0) return;
 
     const headers = activeView === 'logins' 
-      ? ['Email', 'Allowance Remaining', 'Login Time', 'Purchased Today'] 
-      : ['Email', 'Total', 'Currency', 'Status', 'Purchase Time'];
+      ? ['Email', 'Allowance Remaining', 'Login Time', 'Purchased Today']
+      : activeView === 'funnel'
+      ? ['Email', 'Viewed Product', 'Added to Cart', 'Removed from Cart', 'Checkout', 'Last Activity']
+      : activeView === 'abandoned'
+      ? ['Email']
+      : ['Order Number', 'Email', 'Total', 'Currency', 'Status', 'Purchase Time'];
 
     const csvContent = [
       headers.join(','),
@@ -250,8 +261,20 @@ function App() {
             format(new Date(item.login_time), 'yyyy-MM-dd HH:mm:ss'),
             item.hasPurchased ? 'YES' : 'NO'
           ].join(',');
+        } else if (activeView === 'funnel') {
+          return [
+            item.email,
+            item.viewed_product ? 'YES' : 'NO',
+            item.added_to_cart ? 'YES' : 'NO',
+            item.removed_from_cart ? 'YES' : 'NO',
+            item.checkout ? 'YES' : 'NO',
+            format(new Date(item.login_time), 'yyyy-MM-dd HH:mm:ss')
+          ].join(',');
+        } else if (activeView === 'abandoned') {
+          return [item.email].join(',');
         } else {
           return [
+            item.number,
             item.email,
             item.total,
             item.currency,
@@ -325,21 +348,38 @@ function App() {
 
         {/* Shop Funnel Audit Card */}
         <Card 
-          className="group cursor-pointer border-2 border-transparent hover:border-primary/20 transition-all hover:shadow-xl bg-white md:col-span-2"
+          className="group cursor-pointer border-2 border-transparent hover:border-primary/20 transition-all hover:shadow-xl bg-white"
           onClick={() => setActiveView('funnel')}
         >
-          <CardHeader className="space-y-1 text-center">
-            <div className="h-16 w-16 rounded-full bg-orange-50 text-orange-600 flex items-center justify-center mb-4 mx-auto group-hover:scale-110 transition-transform shadow-inner">
-              <TrendingUp size={32} />
+          <CardHeader className="space-y-1">
+            <div className="h-12 w-12 rounded-lg bg-indigo-50 text-indigo-600 flex items-center justify-center mb-2 group-hover:scale-110 transition-transform">
+              <Activity size={28} />
             </div>
-            <CardTitle className="text-2xl">Shop Funnel Audit</CardTitle>
-            <CardDescription className="max-w-md mx-auto">
-              Real-time behavioral tracking: product views, cart actions, and checkout conversion steps.
-            </CardDescription>
+            <CardTitle className="text-xl">Funnel Audit</CardTitle>
+            <CardDescription>Visualize the customer journey from product view to checkout.</CardDescription>
           </CardHeader>
-          <CardFooter className="justify-center border-t bg-slate-50/50 mt-2 py-4">
-            <div className="flex items-center text-sm font-bold text-primary">
-              Enter Funnel Dashboard <ChevronRight size={16} className="ml-1" />
+          <CardFooter>
+            <div className="flex items-center text-sm font-medium text-primary">
+              View Funnel <ChevronRight size={16} className="ml-1" />
+            </div>
+          </CardFooter>
+        </Card>
+
+        {/* Recovery Audit (Abandoned Carts) */}
+        <Card 
+          className="group cursor-pointer border-2 border-transparent hover:border-orange-500/20 transition-all hover:shadow-xl bg-white"
+          onClick={() => setActiveView('abandoned')}
+        >
+          <CardHeader className="space-y-1">
+            <div className="h-12 w-12 rounded-lg bg-orange-50 text-orange-600 flex items-center justify-center mb-2 group-hover:scale-110 transition-transform">
+              <TrendingUp size={28} />
+            </div>
+            <CardTitle className="text-xl text-orange-700">Recovery Audit</CardTitle>
+            <CardDescription>Identify users with abandoned carts for recovery actions.</CardDescription>
+          </CardHeader>
+          <CardFooter>
+            <div className="flex items-center text-sm font-medium text-orange-600">
+              Identify Lost Carts <ChevronRight size={16} className="ml-1" />
             </div>
           </CardFooter>
         </Card>
@@ -591,6 +631,51 @@ function App() {
     </Table>
   );
 
+  const renderAbandonedTable = () => (
+    <Table>
+      <TableHeader>
+        <TableRow className="bg-slate-50/30">
+          <TableHead 
+            className="cursor-pointer hover:bg-slate-100 transition-colors"
+            onClick={() => requestSort('email')}
+          >
+            <div className="flex items-center">
+              Customer Email <SortIcon columnKey="email" />
+            </div>
+          </TableHead>
+          <TableHead className="text-right w-[200px]">Action</TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {filteredData.map((item, index) => (
+          <TableRow key={index} className="group transition-colors">
+            <TableCell 
+              className="font-mono text-sm text-primary font-medium cursor-pointer hover:underline"
+              onClick={() => handleCustomerClick(item.email)}
+            >
+              <div className="flex items-center gap-2">
+                <div className="h-8 w-8 rounded-full bg-orange-50 text-orange-600 flex items-center justify-center group-hover:bg-orange-100 transition-colors">
+                  <User size={14} />
+                </div>
+                {item.email}
+              </div>
+            </TableCell>
+            <TableCell className="text-right">
+              <Button 
+                variant="outline" 
+                size="sm" 
+                className="h-8 text-xs bg-white border-orange-200 text-orange-700 hover:bg-orange-50"
+                onClick={() => handleCustomerClick(item.email)}
+              >
+                Inspect
+              </Button>
+            </TableCell>
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
+  );
+
   return (
     <div className="min-h-screen bg-slate-50/50 p-4 md:p-8 font-sans selection:bg-primary/10">
       <div className="mx-auto max-w-6xl space-y-8">
@@ -608,11 +693,11 @@ function App() {
               </Button>
             )}
             <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary text-primary-foreground shadow-lg">
-              {activeView === 'purchases' ? <ShoppingCart size={24} /> : activeView === 'funnel' ? <TrendingUp size={24} /> : <LayoutDashboard size={24} />}
+              {activeView === 'purchases' ? <ShoppingCart size={24} /> : activeView === 'funnel' ? <TrendingUp size={24} /> : activeView === 'abandoned' ? <Database size={24} className="text-orange-200" /> : <LayoutDashboard size={24} />}
             </div>
             <div>
               <h1 className="text-2xl font-bold tracking-tight text-slate-900">
-                {activeView === 'home' ? 'Shop Audit' : activeView === 'logins' ? 'Login Audit' : activeView === 'purchases' ? 'Purchase Audit' : 'Shop Funnel Audit'}
+                {activeView === 'home' ? 'Shop Audit' : activeView === 'logins' ? 'Login Audit' : activeView === 'purchases' ? 'Purchase Audit' : activeView === 'funnel' ? 'Shop Funnel Audit' : 'Recovery Audit'}
               </h1>
               {activeView !== 'home' && (
                 <p className="text-sm text-muted-foreground">
@@ -734,34 +819,106 @@ function App() {
             {!loading && data.length > 0 && activeView === 'purchases' && (
               <div className="grid gap-6 md:grid-cols-3">
                 <Card className="md:col-span-2 bg-white shadow-sm border-slate-200">
-                  <CardHeader className="pb-2">
-                    <CardTitle className="text-sm font-bold flex items-center gap-2">
-                      <TrendingUp className="h-4 w-4 text-primary" />
-                      Traffic Frequency (Hourly Distribution)
-                    </CardTitle>
-                    <CardDescription>Visualizing {activeView === 'logins' ? 'logins' : 'purchases'} across the day</CardDescription>
+                  <CardHeader className="pb-2 flex flex-row items-center justify-between space-y-0">
+                    <div>
+                      <CardTitle className="text-sm font-bold flex items-center gap-2">
+                        <TrendingUp className="h-4 w-4 text-primary" />
+                        {chartMetric === 'traffic' ? 'Traffic Frequency' : 'Gross Revenue Distribution'}
+                      </CardTitle>
+                      <CardDescription className="text-[10px]">Comparing hourly {chartMetric === 'traffic' ? 'volume' : 'revenue'} vs yesterday</CardDescription>
+                    </div>
+                    <div className="flex p-0.5 bg-slate-100 rounded-md border border-slate-200">
+                      <Button 
+                        variant={chartMetric === 'traffic' ? 'default' : 'ghost'} 
+                        size="sm" 
+                        className={cn("h-6 text-[10px] px-2 rounded-sm", chartMetric === 'traffic' ? "bg-white text-primary shadow-sm hover:bg-white" : "text-slate-500 hover:text-slate-900")}
+                        onClick={() => setChartMetric('traffic')}
+                      >
+                        Traffic
+                      </Button>
+                      <Button 
+                        variant={chartMetric === 'gross' ? 'default' : 'ghost'} 
+                        size="sm" 
+                        className={cn("h-6 text-[10px] px-2 rounded-sm", chartMetric === 'gross' ? "bg-white text-primary shadow-sm hover:bg-white" : "text-slate-500 hover:text-slate-900")}
+                        onClick={() => setChartMetric('gross')}
+                      >
+                        Gross ($)
+                      </Button>
+                    </div>
                   </CardHeader>
                   <CardContent className="h-[200px] pt-4">
                     {(() => {
                       const timeKey = activeView === 'logins' ? 'login_time' : 'purchase_time';
-                      const hours = Array.from({ length: 24 }, (_, i) => ({
+                      const chartData = Array.from({ length: 24 }, (_, i) => ({
                         hour: `${i}:00`,
-                        count: 0
+                        today: 0,
+                        yesterday: 0
                       }));
+
+                      // Helper to get hour in Sydney timezone
+                      const getSydneyHour = (dateStr: string) => {
+                        try {
+                          const date = new Date(dateStr);
+                          const hourStr = new Intl.DateTimeFormat('en-US', {
+                            hour: 'numeric',
+                            hour12: false,
+                            timeZone: 'Australia/Sydney'
+                          }).format(date);
+                          return parseInt(hourStr) % 24;
+                        } catch (e) {
+                          return NaN;
+                        }
+                      };
+
+                      // Process Today's Data
                       data.forEach(item => {
-                        const date = new Date(item[timeKey]);
-                        const hour = date.getHours();
-                        if (!isNaN(hour) && hours[hour]) {
-                          hours[hour].count++;
+                        const hour = getSydneyHour(item[timeKey]);
+                        if (!isNaN(hour) && chartData[hour]) {
+                          if (chartMetric === 'traffic') {
+                            chartData[hour].today++;
+                          } else if (item.payment_status === 'FULLY_CHARGED') {
+                            chartData[hour].today += Number(item.total);
+                          }
                         }
                       });
+
+                      // Process Yesterday's Data
+                      if (activeView === 'purchases') {
+                        yesterdayData.forEach(item => {
+                          const hour = getSydneyHour(item[timeKey]);
+                          if (!isNaN(hour) && chartData[hour]) {
+                            if (chartMetric === 'traffic') {
+                              chartData[hour].yesterday++;
+                            } else if (item.payment_status === 'FULLY_CHARGED') {
+                              chartData[hour].yesterday += Number(item.total);
+                            }
+                          }
+                        });
+                      }
+
+                      // Convert to Cumulative for Gross metric
+                      if (chartMetric === 'gross') {
+                        let todayRunningTotal = 0;
+                        let yesterdayRunningTotal = 0;
+                        chartData.forEach(item => {
+                          todayRunningTotal += item.today;
+                          yesterdayRunningTotal += item.yesterday;
+                          item.today = todayRunningTotal;
+                          item.yesterday = yesterdayRunningTotal;
+                        });
+                      }
+
                       return (
                         <ResponsiveContainer width="100%" height="100%">
-                          <AreaChart data={hours}>
+                          <AreaChart data={chartData}>
                             <defs>
-                              <linearGradient id="colorCount" x1="0" y1="0" x2="0" y2="1">
+                              <linearGradient id="colorToday" x1="0" y1="0" x2="0" y2="1">
                                 <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.3}/>
                                 <stop offset="95%" stopColor="#3b82f6" stopOpacity={0}/>
+                              </linearGradient>
+                              <linearGradient id="colorYesterday" x1="0" y1="0" x2="0" y2="1">
+                                <stop offset="5%" stopColor="#cbd5e1" stopOpacity={0.1}/>
+                                <stop offset="95%" stopColor="#cbd5e1" stopOpacity={0}/>
                               </linearGradient>
                             </defs>
                             <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
@@ -772,17 +929,41 @@ function App() {
                               axisLine={false}
                               interval={3}
                             />
-                            <YAxis fontSize={10} tickLine={false} axisLine={false} />
+                            <YAxis 
+                              fontSize={10} 
+                              tickLine={false} 
+                              axisLine={false} 
+                              tickFormatter={(value) => chartMetric === 'gross' ? `$${Math.round(value)}` : value}
+                            />
                             <Tooltip 
-                              contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}
+                              formatter={(value: any) => chartMetric === 'gross' ? [`$${Number(value).toFixed(2)}`, 'Cumulative Revenue'] : [value, 'Volume']}
+                              contentStyle={{ 
+                                borderRadius: '8px', 
+                                border: 'none', 
+                                boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
+                                fontSize: '12px'
+                              }}
                             />
                             <Area 
-                              type="monotone" 
-                              dataKey="count" 
-                              stroke="#3b82f6" 
-                              fillOpacity={1} 
-                              fill="url(#colorCount)" 
+                              type={chartMetric === 'gross' ? "linear" : "monotone"} 
+                              dataKey="yesterday" 
+                              stroke="#94a3b8" 
                               strokeWidth={2}
+                              strokeDasharray="5 5"
+                              fillOpacity={1} 
+                              fill="url(#colorYesterday)" 
+                              name="Yesterday"
+                              connectNulls
+                            />
+                            <Area 
+                              type={chartMetric === 'gross' ? "linear" : "monotone"} 
+                              dataKey="today" 
+                              stroke="#3b82f6" 
+                              strokeWidth={3}
+                              fillOpacity={1} 
+                              fill="url(#colorToday)" 
+                              name="Today"
+                              connectNulls
                             />
                           </AreaChart>
                         </ResponsiveContainer>
@@ -839,31 +1020,34 @@ function App() {
                       })()}
                     </CardContent>
                   </Card>
+
                 </div>
               </div>
             )}
             
-            <Card className="bg-white border-slate-200 shadow-xl overflow-hidden border-0 animate-in fade-in zoom-in-95 duration-300">
-              <CardHeader className="border-b bg-slate-50/50 py-4 px-6">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <CardTitle className="text-lg font-bold flex items-center gap-2">
-                      {activeView === 'logins' ? <User className="h-5 w-5 text-primary" /> : activeView === 'funnel' ? <TrendingUp className="h-5 w-5 text-orange-600" /> : <ShoppingCart className="h-5 w-5 text-emerald-600" />}
-                      {activeView === 'logins' ? 'Login Audit Trail' : activeView === 'funnel' ? 'Customer Funnel Activity' : 'Purchase Audit Trail'}
-                      {!loading && (
-                        <span className="inline-flex items-center rounded-md bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-600 ring-1 ring-inset ring-slate-500/10">
-                          {filteredData.length} records
-                        </span>
-                      )}
-                    </CardTitle>
-                    <CardDescription className="text-xs">
-                      {activeView === 'logins' 
-                        ? 'Real-time patient login activity and supply tracking' 
-                        : activeView === 'funnel'
-                        ? 'End-to-end customer journey tracking from product view to checkout'
-                        : 'Recent customer purchases and order statuses from the production DB'}
-                    </CardDescription>
-                  </div>
+              <Card className="bg-white border-slate-200 shadow-xl overflow-hidden border-0 animate-in fade-in zoom-in-95 duration-300">
+                <CardHeader className="border-b bg-slate-50/50 py-4 px-6">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <CardTitle className="text-lg font-bold flex items-center gap-2">
+                        {activeView === 'logins' ? <User className="h-5 w-5 text-primary" /> : activeView === 'funnel' ? <TrendingUp className="h-5 w-5 text-orange-600" /> : activeView === 'abandoned' ? <ShoppingCart className="h-5 w-5 text-orange-600" /> : <ShoppingCart className="h-5 w-5 text-emerald-600" />}
+                        {activeView === 'logins' ? 'Login Audit Trail' : activeView === 'funnel' ? 'Customer Funnel Activity' : activeView === 'abandoned' ? 'Abandoned Cart Recovery' : 'Purchase Audit Trail'}
+                        {!loading && (
+                          <span className="inline-flex items-center rounded-md bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-600 ring-1 ring-inset ring-slate-500/10">
+                            {filteredData.length} records
+                          </span>
+                        )}
+                      </CardTitle>
+                      <CardDescription className="text-xs">
+                        {activeView === 'logins' 
+                          ? 'Real-time patient login activity and supply tracking' 
+                          : activeView === 'funnel'
+                          ? 'End-to-end customer journey tracking from product view to checkout'
+                          : activeView === 'abandoned'
+                          ? 'List of users who started a cart but did not complete the purchase'
+                          : 'Recent customer purchases and order statuses from the production DB'}
+                      </CardDescription>
+                    </div>
                   {activeView === 'logins' ? (
                     <div className="flex p-1 bg-slate-200/50 rounded-lg w-fit">
                       <Button
@@ -953,7 +1137,7 @@ function App() {
                   </div>
                 ) : (
                   <div className="overflow-x-auto">
-                    {activeView === 'logins' ? renderLoginsTable() : activeView === 'funnel' ? renderFunnelTable() : renderPurchasesTable()}
+                    {activeView === 'logins' ? renderLoginsTable() : activeView === 'funnel' ? renderFunnelTable() : activeView === 'abandoned' ? renderAbandonedTable() : renderPurchasesTable()}
                   </div>
                 )}
               </CardContent>
