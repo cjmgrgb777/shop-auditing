@@ -279,13 +279,26 @@ app.get('/api/abandoned-carts', async (req, res) => {
     const query = `
       WITH config AS (
           SELECT '${targetDate}'::date AS target_date
+      ),
+      latest_allowance AS (
+          SELECT DISTINCT ON (email) 
+              email, 
+              supply_remaining_interval
+          FROM user_login_supply_tracking
+          WHERE (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Australia/Sydney')::date = (SELECT target_date FROM config)
+          ORDER BY email, created_at DESC
       )
-      SELECT DISTINCT
-          email
-      FROM cart_sessions, config
-      WHERE (created_at AT TIME ZONE 'Australia/Sydney')::date = config.target_date
-        AND is_converted = false
-      ORDER BY email;
+      SELECT DISTINCT ON (c.email)
+          c.email,
+          la.supply_remaining_interval as days_allowance_remaining,
+          c.created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Australia/Sydney' as cart_created_sydney
+      FROM cart_sessions c
+      INNER JOIN latest_allowance la ON LOWER(c.email) = LOWER(la.email)
+      CROSS JOIN config
+      WHERE (c.created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Australia/Sydney')::date = config.target_date
+        AND c.is_converted = false
+        AND la.supply_remaining_interval > 0
+      ORDER BY c.email, c.created_at DESC;
     `;
 
     const response = await axios.post(GATEWAY_URL, {

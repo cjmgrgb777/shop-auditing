@@ -248,7 +248,7 @@ function App() {
       : activeView === 'funnel'
       ? ['Email', 'Viewed Product', 'Added to Cart', 'Removed from Cart', 'Checkout', 'Last Activity']
       : activeView === 'abandoned'
-      ? ['Email']
+      ? ['Email', 'Allowance Remaining', 'Cart Created (Sydney)']
       : ['Order Number', 'Email', 'Total', 'Currency', 'Status', 'Purchase Time'];
 
     const csvContent = [
@@ -271,7 +271,11 @@ function App() {
             format(new Date(item.login_time), 'yyyy-MM-dd HH:mm:ss')
           ].join(',');
         } else if (activeView === 'abandoned') {
-          return [item.email].join(',');
+          return [
+            item.email,
+            item.days_allowance_remaining,
+            format(new Date(item.cart_created_sydney), 'yyyy-MM-dd HH:mm:ss')
+          ].join(',');
         } else {
           return [
             item.number,
@@ -300,6 +304,11 @@ function App() {
     setDate(e.target.value);
   };
 
+  const enterView = (view: View) => {
+    setActiveView(view);
+    setDate(format(new Date(), 'yyyy-MM-dd'));
+  };
+
   const renderHome = () => (
     <div className="space-y-8 py-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
       <div className="text-center space-y-2">
@@ -311,7 +320,7 @@ function App() {
         {/* Login Audit Card */}
         <Card 
           className="group cursor-pointer border-2 border-transparent hover:border-primary/20 transition-all hover:shadow-xl bg-white"
-          onClick={() => setActiveView('logins')}
+          onClick={() => enterView('logins')}
         >
           <CardHeader className="space-y-1">
             <div className="h-12 w-12 rounded-lg bg-blue-50 text-blue-600 flex items-center justify-center mb-2 group-hover:scale-110 transition-transform">
@@ -330,7 +339,7 @@ function App() {
         {/* Purchase Audit Card */}
         <Card 
           className="group cursor-pointer border-2 border-transparent hover:border-primary/20 transition-all hover:shadow-xl bg-white"
-          onClick={() => setActiveView('purchases')}
+          onClick={() => enterView('purchases')}
         >
           <CardHeader className="space-y-1">
             <div className="h-12 w-12 rounded-lg bg-emerald-50 text-emerald-600 flex items-center justify-center mb-2 group-hover:scale-110 transition-transform">
@@ -349,7 +358,7 @@ function App() {
         {/* Shop Funnel Audit Card */}
         <Card 
           className="group cursor-pointer border-2 border-transparent hover:border-primary/20 transition-all hover:shadow-xl bg-white"
-          onClick={() => setActiveView('funnel')}
+          onClick={() => enterView('funnel')}
         >
           <CardHeader className="space-y-1">
             <div className="h-12 w-12 rounded-lg bg-indigo-50 text-indigo-600 flex items-center justify-center mb-2 group-hover:scale-110 transition-transform">
@@ -368,7 +377,7 @@ function App() {
         {/* Recovery Audit (Abandoned Carts) */}
         <Card 
           className="group cursor-pointer border-2 border-transparent hover:border-orange-500/20 transition-all hover:shadow-xl bg-white"
-          onClick={() => setActiveView('abandoned')}
+          onClick={() => enterView('abandoned')}
         >
           <CardHeader className="space-y-1">
             <div className="h-12 w-12 rounded-lg bg-orange-50 text-orange-600 flex items-center justify-center mb-2 group-hover:scale-110 transition-transform">
@@ -643,7 +652,9 @@ function App() {
               Customer Email <SortIcon columnKey="email" />
             </div>
           </TableHead>
-          <TableHead className="text-right w-[200px]">Action</TableHead>
+          <TableHead className="text-center">Allowance Remaining</TableHead>
+          <TableHead className="text-center">Cart Created</TableHead>
+          <TableHead className="text-right w-[150px]">Action</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
@@ -659,6 +670,12 @@ function App() {
                 </div>
                 {item.email}
               </div>
+            </TableCell>
+            <TableCell className="text-center">
+              <span className="font-bold text-orange-600">{item.days_allowance_remaining}</span>
+            </TableCell>
+            <TableCell className="text-center text-muted-foreground tabular-nums">
+              {safeFormatDate(item.cart_created_sydney)}
             </TableCell>
             <TableCell className="text-right">
               <Button 
