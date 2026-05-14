@@ -585,10 +585,7 @@ function App() {
       <TableBody>
         {filteredData.map((patient: Patient, index) => (
           <TableRow key={index} className="group transition-colors">
-            <TableCell 
-              className="font-mono text-sm text-primary font-medium cursor-pointer hover:underline"
-              onClick={() => handleCustomerClick(patient.email)}
-            >
+            <TableCell className="font-mono text-sm text-slate-600 font-medium">
               <div className="flex items-center gap-2">
                 <div className="h-8 w-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-500 group-hover:bg-primary/10 group-hover:text-primary transition-colors">
                   <User size={14} />
@@ -724,10 +721,7 @@ function App() {
       <TableBody>
         {filteredData.map((event: FunnelEvent, index) => (
           <TableRow key={index} className="group transition-colors">
-            <TableCell 
-              className="font-mono text-sm text-primary font-medium cursor-pointer hover:underline"
-              onClick={() => handleCustomerClick(event.email)}
-            >
+            <TableCell className="font-mono text-sm text-slate-600 font-medium">
               <div className="flex items-center gap-2">
                 <div className="h-8 w-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-500 group-hover:bg-orange-100 group-hover:text-orange-600 transition-colors">
                   <User size={14} />
@@ -776,10 +770,7 @@ function App() {
       <TableBody>
         {filteredData.map((item, index) => (
           <TableRow key={index} className="group transition-colors">
-            <TableCell 
-              className="font-mono text-sm text-primary font-medium cursor-pointer hover:underline"
-              onClick={() => handleCustomerClick(item.email)}
-            >
+            <TableCell className="font-mono text-sm text-slate-600 font-medium">
               <div className="flex items-center gap-2">
                 <div className="h-8 w-8 rounded-full bg-orange-50 text-orange-600 flex items-center justify-center group-hover:bg-orange-100 transition-colors">
                   <User size={14} />
@@ -794,14 +785,7 @@ function App() {
               {safeFormatDate(item.cart_created_sydney)}
             </TableCell>
             <TableCell className="text-right">
-              <Button 
-                variant="outline" 
-                size="sm" 
-                className="h-8 text-xs bg-white border-orange-200 text-orange-700 hover:bg-orange-50"
-                onClick={() => handleCustomerClick(item.email)}
-              >
-                Inspect
-              </Button>
+              {/* Inspection restricted to Purchase Audit */}
             </TableCell>
           </TableRow>
         ))}
@@ -1535,19 +1519,14 @@ function App() {
               unfulfilledModalEmails.map((email, idx) => (
                 <div 
                   key={idx} 
-                  className="flex items-center justify-between p-3 bg-slate-50 rounded-lg border border-slate-100 hover:border-purple-200 hover:bg-purple-50 transition-colors group cursor-pointer"
-                  onClick={() => {
-                    setIsUnfulfilledModalOpen(false);
-                    handleCustomerClick(email);
-                  }}
+                  className="flex items-center justify-between p-3 bg-slate-50 rounded-lg border border-slate-100 group"
                 >
                   <div className="flex items-center gap-3">
-                    <div className="h-8 w-8 rounded-full bg-white flex items-center justify-center text-slate-400 group-hover:text-purple-600 shadow-sm border border-slate-100">
+                    <div className="h-8 w-8 rounded-full bg-white flex items-center justify-center text-slate-400 shadow-sm border border-slate-100">
                       <User size={14} />
                     </div>
-                    <span className="font-mono text-sm text-slate-700 group-hover:text-purple-900">{email}</span>
+                    <span className="font-mono text-sm text-slate-700">{email}</span>
                   </div>
-                  <ChevronRight size={14} className="text-slate-300 group-hover:text-purple-400" />
                 </div>
               ))
             ) : (
