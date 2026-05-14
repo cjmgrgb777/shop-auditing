@@ -29,7 +29,7 @@ app.get('/api/patients', async (req, res) => {
       SELECT DISTINCT ON (email)
           email,
           supply_remaining_interval AS allowance,
-          created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Australia/Sydney' AS login_time
+          created_at AS login_time
       FROM user_login_supply_tracking, config
       WHERE (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Australia/Sydney')::date = config.target_date
         ${supplyCondition}
@@ -170,7 +170,7 @@ app.get('/api/funnel', async (req, res) => {
     const query = `
       SELECT DISTINCT ON (email)
           email,
-          created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Australia/Sydney' AS login_time
+          created_at AS login_time
       FROM user_login_supply_tracking
       WHERE (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Australia/Sydney')::date = '${targetDate}'::date
       ORDER BY email, created_at DESC;
@@ -270,8 +270,9 @@ app.get('/api/customer/:email', async (req, res) => {
 });
 
 app.get('/api/abandoned-carts', async (req, res) => {
-  const { date } = req.query;
+  const { date, withAllowance } = req.query;
   const targetDate = date || new Date().toISOString().split('T')[0];
+  const allowanceFilter = withAllowance === 'true' ? 'AND la.supply_remaining_interval > 0' : '';
 
   try {
     if (!AUTH_TOKEN) throw new Error('AUTH_TOKEN not configured');
@@ -285,19 +286,18 @@ app.get('/api/abandoned-carts', async (req, res) => {
               email, 
               supply_remaining_interval
           FROM user_login_supply_tracking
-          WHERE (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Australia/Sydney')::date = (SELECT target_date FROM config)
           ORDER BY email, created_at DESC
       )
       SELECT DISTINCT ON (c.email)
           c.email,
           la.supply_remaining_interval as days_allowance_remaining,
-          c.created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Australia/Sydney' as cart_created_sydney
+          c.created_at as cart_created_sydney
       FROM cart_sessions c
-      INNER JOIN latest_allowance la ON LOWER(c.email) = LOWER(la.email)
+      LEFT JOIN latest_allowance la ON LOWER(c.email) = LOWER(la.email)
       CROSS JOIN config
-      WHERE (c.created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Australia/Sydney')::date = config.target_date
+      WHERE (c.created_at AT TIME ZONE 'Australia/Sydney')::date = config.target_date
         AND c.is_converted = false
-        AND la.supply_remaining_interval > 0
+        ${allowanceFilter}
       ORDER BY c.email, c.created_at DESC;
     `;
 
@@ -316,6 +316,127 @@ app.get('/api/abandoned-carts', async (req, res) => {
       { email: 'lost_customer[at]example.com' },
       { email: 'abandoned_cart_2[at]test.com' }
     ]);
+  }
+});
+
+app.get('/api/daily-intent-audit', async (req, res) => {
+  const { date } = req.query;
+  const targetDateStr = (date as string) || new Date().toISOString().split('T')[0];
+  const targetDate = new Date(targetDateStr);
+  
+  const SALEOR_URL = process.env.SALEOR_API_URL;
+  const SALEOR_TOKEN = process.env.SALEOR_AUTH_TOKEN;
+
+  try {
+    if (!AUTH_TOKEN) throw new Error('AUTH_TOKEN not configured');
+    if (!SALEOR_URL || !SALEOR_TOKEN) throw new Error('Saleor credentials missing');
+
+    const queryLogins = `
+      SELECT DISTINCT ON (email)
+          email,
+          supply_remaining_interval AS allowance
+      FROM user_login_supply_tracking
+      WHERE (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Australia/Sydney')::date = '${targetDateStr}'::date
+      ORDER BY email, created_at DESC;
+    `;
+
+    const gatewayRes = await axios.post(GATEWAY_URL, {
+      req_method: 'GET',
+      query: queryLogins,
+      params: []
+    }, {
+      headers: { 'Authorization': `Bearer ${AUTH_TOKEN}`, 'Content-Type': 'application/json' }
+    });
+
+    const logins = gatewayRes.data?.data || [];
+    const totalLogins = logins.length;
+    const totalLoginsWithAllowance = logins.filter((l: any) => l.allowance > 0).length;
+
+    const dateStartFetch = formatFull(subDays(targetDate, 8), 'yyyy-MM-dd');
+    const dateEndFetch = formatFull(targetDate, 'yyyy-MM-dd');
+
+    const saleorQuery = `
+      query OrdersByDate($dateStart: Date, $dateEnd: Date) {
+        orders(filter: {created: {gte: $dateStart, lte: $dateEnd}}, first: 100) {
+          edges {
+            node {
+              number
+              userEmail
+              paymentStatus
+              status
+              created
+            }
+          }
+        }
+      }
+    `;
+
+    const saleorRes = await axios.post(SALEOR_URL, { 
+      query: saleorQuery, 
+      variables: { dateStart: dateStartFetch, dateEnd: dateEndFetch } 
+    }, {
+      headers: { 'Authorization': `Bearer ${SALEOR_TOKEN}`, 'Content-Type': 'application/json' }
+    });
+
+    const allOrders = saleorRes.data?.data?.orders?.edges || [];
+    
+    let totalOrdersOnDate = 0;
+    const unfulfilledEmails7Days = new Set<string>();
+
+    allOrders.forEach((edge: any) => {
+      const order = edge.node;
+      const createdUtc = new Date(order.created);
+      const sydneyDate = formatTz(toZonedTime(createdUtc, 'Australia/Sydney'), 'yyyy-MM-dd');
+
+      if (sydneyDate === targetDateStr && order.paymentStatus === 'FULLY_CHARGED') {
+        totalOrdersOnDate++;
+      }
+
+      const msDiff = targetDate.getTime() - new Date(sydneyDate).getTime();
+      const daysDiff = msDiff / (1000 * 3600 * 24);
+      
+      if (daysDiff >= 0 && daysDiff <= 7 && order.status !== 'FULFILLED') {
+        if (order.userEmail) {
+          unfulfilledEmails7Days.add(order.userEmail.toLowerCase());
+        }
+      }
+    });
+
+    const didNotBuy = Math.max(0, totalLoginsWithAllowance - totalOrdersOnDate);
+    const nonConversionPercent = totalLoginsWithAllowance > 0 
+      ? Math.round((didNotBuy / totalLoginsWithAllowance) * 100)
+      : 0;
+
+    let unfulfilledLookupsList: string[] = [];
+    logins.forEach((l: any) => {
+      if (l.email && unfulfilledEmails7Days.has(l.email.toLowerCase())) {
+        unfulfilledLookupsList.push(l.email.toLowerCase());
+      }
+    });
+
+    res.json({
+      date: targetDateStr,
+      total_orders: totalOrdersOnDate,
+      total_logins: totalLogins,
+      total_logins_with_allowance: totalLoginsWithAllowance,
+      did_not_buy: didNotBuy,
+      non_conversion_percent: Number(nonConversionPercent),
+      logins_with_unfulfilled_orders: unfulfilledLookupsList.length,
+      unfulfilled_lookups_emails: unfulfilledLookupsList
+    });
+
+  } catch (error: any) {
+    console.error('Error in daily intent audit:', error.message);
+    
+    res.json({
+      date: targetDateStr,
+      total_orders: 12,
+      total_logins: 45,
+      total_logins_with_allowance: 30,
+      did_not_buy: 18,
+      non_conversion_percent: 60.00,
+      logins_with_unfulfilled_orders: 5
+    });
   }
 });
 

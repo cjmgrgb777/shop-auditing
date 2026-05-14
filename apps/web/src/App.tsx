@@ -57,7 +57,7 @@ import {
 
 const apiUrl = 'http://localhost:3001';
 
-type View = 'home' | 'logins' | 'purchases' | 'funnel' | 'abandoned';
+type View = 'home' | 'logins' | 'purchases' | 'funnel' | 'abandoned' | 'intent';
 
 interface Patient {
   email: string;
@@ -88,6 +88,7 @@ interface FunnelEvent {
 function App() {
   const [activeView, setActiveView] = useState<View>('home');
   const [loginTab, setLoginTab] = useState<'all' | 'allowance'>('allowance');
+  const [recoveryTab, setRecoveryTab] = useState<'all' | 'allowance'>('all');
   const [purchaseTab, setPurchaseTab] = useState<'all' | 'paid' | 'unpaid'>('all');
   const [data, setData] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
@@ -98,21 +99,41 @@ function App() {
   const [chartMetric, setChartMetric] = useState<'traffic' | 'gross'>('traffic');
   const [yesterdayTotal, setYesterdayTotal] = useState<number | null>(null);
   const [yesterdayData, setYesterdayData] = useState<any[]>([]);
+  const [dataCache, setDataCache] = useState<Record<string, any>>({});
   
   // Customer details state
   const [selectedCustomer, setSelectedCustomer] = useState<any | null>(null);
   const [isCustomerModalOpen, setIsCustomerModalOpen] = useState(false);
   const [loadingCustomer, setLoadingCustomer] = useState(false);
+  const [unfulfilledModalEmails, setUnfulfilledModalEmails] = useState<string[]>([]);
+  const [isUnfulfilledModalOpen, setIsUnfulfilledModalOpen] = useState(false);
 
-  const fetchData = async (view: View, targetDate: string, currentLoginTab: 'all' | 'allowance') => {
+  const fetchData = async (view: View, targetDate: string, currentLoginTab: 'all' | 'allowance', currentRecoveryTab: 'all' | 'allowance') => {
     if (view === 'home') return;
     
-    setLoading(true);
+    const cacheKey = `${view}-${targetDate}-${currentLoginTab}-${currentRecoveryTab}`;
+    
+    // If we have cached data, show it immediately
+    if (dataCache[cacheKey]) {
+      setData(dataCache[cacheKey].data);
+      if (view === 'purchases') {
+        setYesterdayData(dataCache[cacheKey].yesterdayData || []);
+        setYesterdayTotal(dataCache[cacheKey].yesterdayTotal || 0);
+      }
+      // We skip the loading spinner for cached views
+    } else {
+      setLoading(true);
+    }
+
     setError(null);
     try {
       const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3001';
       let endpoint = '';
       let params = `date=${targetDate}`;
+
+      let finalData = [];
+      let yData = [];
+      let yTotal = 0;
 
       if (view === 'logins') {
         endpoint = 'patients';
@@ -120,7 +141,6 @@ function App() {
           params += '&withAllowance=true';
         }
         
-        // Fetch both patients and purchases to cross-reference
         const [patientsRes, purchasesRes] = await Promise.all([
           axios.get(`${apiUrl}/api/patients?${params}`),
           axios.get(`${apiUrl}/api/purchases?date=${targetDate}`)
@@ -133,24 +153,38 @@ function App() {
             .map((p: any) => p.email.toLowerCase())
         );
         
-        const patientsWithPurchaseInfo = patientsRes.data.map((patient: any) => {
-          // Normalize emails for matching (handle [at] and @)
+        finalData = patientsRes.data.map((patient: any) => {
           const patientEmail = patient.email.toLowerCase().replace('[at]', '@');
           return {
             ...patient,
             hasPurchased: paidEmails.has(patientEmail)
           };
         });
-        
-        setData(patientsWithPurchaseInfo);
       } else if (view === 'funnel') {
         endpoint = 'funnel';
         const response = await axios.get(`${apiUrl}/api/${endpoint}?${params}`);
-        setData(response.data);
+        finalData = response.data;
       } else if (view === 'abandoned') {
         endpoint = 'abandoned-carts';
+        if (currentRecoveryTab === 'allowance') {
+          params += '&withAllowance=true';
+        }
         const response = await axios.get(`${apiUrl}/api/${endpoint}?${params}`);
-        setData(response.data);
+        finalData = response.data;
+      } else if (view === 'intent') {
+        endpoint = 'daily-intent-audit';
+        const targetDateObj = new Date(`${targetDate}T12:00:00Z`);
+        const promises = [];
+        for (let i = 0; i < 28; i++) {
+          const d = format(subDays(targetDateObj, i), 'yyyy-MM-dd');
+          promises.push(
+            axios.get(`${apiUrl}/api/${endpoint}?date=${d}`)
+              .then(res => res.data)
+              .catch(() => null)
+          );
+        }
+        const results = await Promise.all(promises);
+        finalData = results.filter(r => r !== null);
       } else {
         endpoint = 'purchases';
         const [todayRes, yesterdayRes] = await Promise.all([
@@ -158,15 +192,29 @@ function App() {
           axios.get(`${apiUrl}/api/${endpoint}?date=${format(subDays(new Date(targetDate), 1), 'yyyy-MM-dd')}`)
         ]);
         
-        setData(todayRes.data);
-        setYesterdayData(yesterdayRes.data);
-        const yTotal = yesterdayRes.data
+        finalData = todayRes.data;
+        yData = yesterdayRes.data;
+        yTotal = yesterdayRes.data
           .filter((i: any) => i.payment_status === 'FULLY_CHARGED')
           .reduce((acc: number, i: any) => acc + Number(i.total), 0);
+        
+        setYesterdayData(yData);
         setYesterdayTotal(yTotal);
       }
 
-      // Reset sort to default when fetching new data
+      setData(finalData);
+      
+      // Update cache
+      setDataCache(prev => ({ 
+        ...prev, 
+        [cacheKey]: { 
+          data: finalData, 
+          yesterdayData: yData, 
+          yesterdayTotal: yTotal,
+          timestamp: Date.now() 
+        } 
+      }));
+
       setSortConfig({ key: view === 'logins' ? 'login_time' : 'purchase_time', direction: 'desc' });
     } catch (err) {
       console.error(`Error fetching ${view}:`, err);
@@ -249,6 +297,8 @@ function App() {
       ? ['Email', 'Viewed Product', 'Added to Cart', 'Removed from Cart', 'Checkout', 'Last Activity']
       : activeView === 'abandoned'
       ? ['Email', 'Allowance Remaining', 'Cart Created (Sydney)']
+      : activeView === 'intent'
+      ? ['Date', 'Total Logins', 'Logins With Allowance', 'Total Orders', 'Did Not Buy', 'Non-Conversion %', 'Unfulfilled Lookups']
       : ['Order Number', 'Email', 'Total', 'Currency', 'Status', 'Purchase Time'];
 
     const csvContent = [
@@ -275,6 +325,16 @@ function App() {
             item.email,
             item.days_allowance_remaining,
             format(new Date(item.cart_created_sydney), 'yyyy-MM-dd HH:mm:ss')
+          ].join(',');
+        } else if (activeView === 'intent') {
+          return [
+            item.date,
+            item.total_logins,
+            item.total_logins_with_allowance,
+            item.total_orders,
+            item.did_not_buy,
+            item.non_conversion_percent,
+            item.logins_with_unfulfilled_orders
           ].join(',');
         } else {
           return [
@@ -306,7 +366,7 @@ function App() {
 
   const enterView = (view: View) => {
     setActiveView(view);
-    setDate(format(new Date(), 'yyyy-MM-dd'));
+    setDate(view === 'intent' ? format(subDays(new Date(), 1), 'yyyy-MM-dd') : format(new Date(), 'yyyy-MM-dd'));
   };
 
   const renderHome = () => (
@@ -392,6 +452,25 @@ function App() {
             </div>
           </CardFooter>
         </Card>
+
+        {/* Order Intent Audit */}
+        <Card 
+          className="group cursor-pointer border-2 border-transparent hover:border-purple-500/20 transition-all hover:shadow-xl bg-white"
+          onClick={() => enterView('intent')}
+        >
+          <CardHeader className="space-y-1">
+            <div className="h-12 w-12 rounded-lg bg-purple-50 text-purple-600 flex items-center justify-center mb-2 group-hover:scale-110 transition-transform">
+              <Eye size={28} />
+            </div>
+            <CardTitle className="text-xl text-purple-700">Order Intent Audit</CardTitle>
+            <CardDescription>Track if users logged in to check on an unfulfilled order vs buying.</CardDescription>
+          </CardHeader>
+          <CardFooter>
+            <div className="flex items-center text-sm font-medium text-purple-600">
+              View Order Intent <ChevronRight size={16} className="ml-1" />
+            </div>
+          </CardFooter>
+        </Card>
       </div>
 
       {/* Quick Stats Summary */}
@@ -422,8 +501,8 @@ function App() {
   );
 
   useEffect(() => {
-    fetchData(activeView, date, loginTab);
-  }, [activeView, date, loginTab]);
+    fetchData(activeView, date, loginTab, recoveryTab);
+  }, [activeView, date, loginTab, recoveryTab]);
 
   const SortIcon = ({ columnKey }: { columnKey: string }) => {
     if (sortConfig.key !== columnKey) return <ArrowUpDown size={14} className="ml-1 opacity-20" />;
@@ -435,9 +514,25 @@ function App() {
   const safeFormatDate = (dateStr: string) => {
     try {
       if (!dateStr) return 'N/A';
-      const dateObj = new Date(dateStr);
+      
+      // Ensure strings like "2026-05-12 14:30:00" are treated as UTC by the browser
+      let normalizedDateStr = dateStr;
+      if (typeof dateStr === 'string' && !dateStr.includes('Z') && !/[+-]\d{2}:\d{2}$/.test(dateStr)) {
+        normalizedDateStr = dateStr.replace(' ', 'T') + 'Z';
+      }
+      
+      const dateObj = new Date(normalizedDateStr);
       if (isNaN(dateObj.getTime())) return 'Invalid Date';
-      return format(dateObj, 'MMM dd, HH:mm:ss');
+      
+      return new Intl.DateTimeFormat('en-AU', {
+        month: 'short',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hour12: false,
+        timeZone: 'Australia/Sydney'
+      }).format(dateObj);
     } catch (e) {
       return 'Error';
     }
@@ -530,7 +625,7 @@ function App() {
             onClick={() => requestSort('purchase_time')}
           >
             <div className="flex items-center justify-end">
-              Order Date <SortIcon columnKey="purchase_time" />
+              Order Date (AEST/AEDT) <SortIcon columnKey="purchase_time" />
             </div>
           </TableHead>
         </TableRow>
@@ -653,7 +748,7 @@ function App() {
             </div>
           </TableHead>
           <TableHead className="text-center">Allowance Remaining</TableHead>
-          <TableHead className="text-center">Cart Created</TableHead>
+          <TableHead className="text-center">Cart Created (AEST/AEDT)</TableHead>
           <TableHead className="text-right w-[150px]">Action</TableHead>
         </TableRow>
       </TableHeader>
@@ -693,6 +788,52 @@ function App() {
     </Table>
   );
 
+  const renderIntentTable = () => (
+    <Table>
+      <TableHeader>
+        <TableRow className="bg-slate-50/30">
+          <TableHead>Date</TableHead>
+          <TableHead className="text-center">Total Logins</TableHead>
+          <TableHead className="text-center">Logins (Allowance)</TableHead>
+          <TableHead className="text-center">Total Orders</TableHead>
+          <TableHead className="text-center">Did Not Buy</TableHead>
+          <TableHead className="text-center">Non-Conversion %</TableHead>
+          <TableHead className="text-right">Unfulfilled Lookups</TableHead>
+        </TableRow>
+      </TableHeader>
+      <TableBody>
+        {filteredData.map((item, index) => (
+          <TableRow key={index} className="group transition-colors">
+            <TableCell className="font-medium text-slate-900">{item.date}</TableCell>
+            <TableCell className="text-center">{item.total_logins}</TableCell>
+            <TableCell className="text-center font-bold text-slate-900">{item.total_logins_with_allowance}</TableCell>
+            <TableCell className="text-center text-emerald-600 font-bold">{item.total_orders}</TableCell>
+            <TableCell className="text-center text-orange-600 font-bold">{item.did_not_buy}</TableCell>
+            <TableCell className="text-center font-mono">
+              <span className={cn(
+                "px-2 py-1 rounded-md text-xs font-bold",
+                item.non_conversion_percent > 70 ? "bg-red-100 text-red-700" : "bg-blue-100 text-blue-700"
+              )}>
+                {item.non_conversion_percent}%
+              </span>
+            </TableCell>
+            <TableCell className="text-right font-bold text-purple-700">
+              <button 
+                className="hover:underline cursor-pointer"
+                onClick={() => {
+                  setUnfulfilledModalEmails(item.unfulfilled_lookups_emails || []);
+                  setIsUnfulfilledModalOpen(true);
+                }}
+              >
+                {item.logins_with_unfulfilled_orders}
+              </button>
+            </TableCell>
+          </TableRow>
+        ))}
+      </TableBody>
+    </Table>
+  );
+
   return (
     <div className="min-h-screen bg-slate-50/50 p-4 md:p-8 font-sans selection:bg-primary/10">
       <div className="mx-auto max-w-6xl space-y-8">
@@ -710,11 +851,11 @@ function App() {
               </Button>
             )}
             <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary text-primary-foreground shadow-lg">
-              {activeView === 'purchases' ? <ShoppingCart size={24} /> : activeView === 'funnel' ? <TrendingUp size={24} /> : activeView === 'abandoned' ? <Database size={24} className="text-orange-200" /> : <LayoutDashboard size={24} />}
+              {activeView === 'purchases' ? <ShoppingCart size={24} /> : activeView === 'funnel' ? <TrendingUp size={24} /> : activeView === 'abandoned' ? <Database size={24} className="text-orange-200" /> : activeView === 'intent' ? <Eye size={24} className="text-purple-200" /> : <LayoutDashboard size={24} />}
             </div>
             <div>
               <h1 className="text-2xl font-bold tracking-tight text-slate-900">
-                {activeView === 'home' ? 'Shop Audit' : activeView === 'logins' ? 'Login Audit' : activeView === 'purchases' ? 'Purchase Audit' : activeView === 'funnel' ? 'Shop Funnel Audit' : 'Recovery Audit'}
+                {activeView === 'home' ? 'Shop Audit' : activeView === 'logins' ? 'Login Audit' : activeView === 'purchases' ? 'Purchase Audit' : activeView === 'funnel' ? 'Shop Funnel Audit' : activeView === 'intent' ? 'Order Intent Audit' : 'Recovery Audit'}
               </h1>
               {activeView !== 'home' && (
                 <p className="text-sm text-muted-foreground">
@@ -731,6 +872,7 @@ function App() {
                 <Input 
                   type="date" 
                   value={date} 
+                  max={activeView === 'intent' ? format(subDays(new Date(), 1), 'yyyy-MM-dd') : undefined}
                   onChange={handleDateChange}
                   className="pl-9 w-[180px] bg-white shadow-sm border-slate-200"
                 />
@@ -738,7 +880,7 @@ function App() {
               <Button 
                 variant="outline" 
                 size="icon" 
-                onClick={() => fetchData(activeView, date, loginTab)}
+                onClick={() => fetchData(activeView, date, loginTab, recoveryTab)}
                 className={cn("bg-white shadow-sm border-slate-200", loading && "animate-spin")}
               >
                 <RefreshCw size={18} />
@@ -794,12 +936,20 @@ function App() {
             )}
 
             {activeView === 'purchases' && !loading && data.length > 0 && (() => {
-              const paidEmails = new Set(data.filter(i => i.payment_status === 'FULLY_CHARGED').map(i => i.email));
-              const totalPaid = data.filter(i => i.payment_status === 'FULLY_CHARGED').reduce((acc, i) => acc + Number(i.total), 0);
+              const paidItems = data.filter(i => i.payment_status === 'FULLY_CHARGED');
+              const paidEmails = new Set(paidItems.map(i => i.email));
+              const totalPaid = paidItems.reduce((acc, i) => acc + Number(i.total), 0);
               const totalUnpaid = data.filter(i => i.payment_status !== 'FULLY_CHARGED' && !paidEmails.has(i.email)).reduce((acc, i) => acc + Number(i.total), 0);
               
+              const avgOrderValue = paidItems.length > 0 ? totalPaid / paidItems.length : 0;
+              let yesterdayAov = null;
+              if (yesterdayTotal !== null && yesterdayData && yesterdayData.length > 0) {
+                const yPaidCount = yesterdayData.filter((i: any) => i.payment_status === 'FULLY_CHARGED').length;
+                yesterdayAov = yPaidCount > 0 ? yesterdayTotal / yPaidCount : 0;
+              }
+              
               return (
-                <div className="grid gap-4 md:grid-cols-2 animate-in fade-in slide-in-from-top-4 duration-500">
+                <div className="grid gap-4 md:grid-cols-3 animate-in fade-in slide-in-from-top-4 duration-500">
                   <Card className="bg-white border-emerald-100 shadow-sm">
                     <CardHeader className="pb-2">
                       <CardDescription className="text-emerald-600 font-bold text-xs uppercase tracking-wider">Total Fully Paid</CardDescription>
@@ -820,6 +970,28 @@ function App() {
                       )}
                     </CardHeader>
                   </Card>
+
+                  <Card className="bg-white border-blue-100 shadow-sm">
+                    <CardHeader className="pb-2">
+                      <CardDescription className="text-blue-600 font-bold text-xs uppercase tracking-wider">Avg Order Value</CardDescription>
+                      <CardTitle className="text-3xl font-black text-slate-900">
+                        AUD ${avgOrderValue.toFixed(2)}
+                      </CardTitle>
+                      {yesterdayAov !== null && (
+                        <div className="flex items-center mt-1">
+                          <div className={cn(
+                            "flex items-center text-xs font-bold px-2 py-0.5 rounded",
+                            avgOrderValue >= yesterdayAov ? "text-blue-600 bg-blue-50" : "text-red-600 bg-red-50"
+                          )}>
+                            {avgOrderValue >= yesterdayAov ? <ArrowUp size={12} className="mr-0.5" /> : <ArrowDown size={12} className="mr-0.5" />}
+                            ${Math.abs(avgOrderValue - yesterdayAov).toFixed(2)}
+                          </div>
+                          <span className="text-xs text-slate-400 ml-1.5 font-medium">vs yesterday</span>
+                        </div>
+                      )}
+                    </CardHeader>
+                  </Card>
+
                   <Card className="bg-white border-red-100 shadow-sm">
                     <CardHeader className="pb-2">
                       <CardDescription className="text-red-600 font-bold text-xs uppercase tracking-wider">True Unpaid / Pending</CardDescription>
@@ -1047,8 +1219,8 @@ function App() {
                   <div className="flex items-center justify-between">
                     <div>
                       <CardTitle className="text-lg font-bold flex items-center gap-2">
-                        {activeView === 'logins' ? <User className="h-5 w-5 text-primary" /> : activeView === 'funnel' ? <TrendingUp className="h-5 w-5 text-orange-600" /> : activeView === 'abandoned' ? <ShoppingCart className="h-5 w-5 text-orange-600" /> : <ShoppingCart className="h-5 w-5 text-emerald-600" />}
-                        {activeView === 'logins' ? 'Login Audit Trail' : activeView === 'funnel' ? 'Customer Funnel Activity' : activeView === 'abandoned' ? 'Abandoned Cart Recovery' : 'Purchase Audit Trail'}
+                        {activeView === 'logins' ? <User className="h-5 w-5 text-primary" /> : activeView === 'funnel' ? <TrendingUp className="h-5 w-5 text-orange-600" /> : activeView === 'abandoned' ? <ShoppingCart className="h-5 w-5 text-orange-600" /> : activeView === 'intent' ? <Eye className="h-5 w-5 text-purple-600" /> : <ShoppingCart className="h-5 w-5 text-emerald-600" />}
+                        {activeView === 'logins' ? 'Login Audit Trail' : activeView === 'funnel' ? 'Customer Funnel Activity' : activeView === 'abandoned' ? 'Abandoned Cart Recovery' : activeView === 'intent' ? 'Order Intent Statistics' : 'Purchase Audit Trail'}
                         {!loading && (
                           <span className="inline-flex items-center rounded-md bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-600 ring-1 ring-inset ring-slate-500/10">
                             {filteredData.length} records
@@ -1062,6 +1234,8 @@ function App() {
                           ? 'End-to-end customer journey tracking from product view to checkout'
                           : activeView === 'abandoned'
                           ? 'List of users who started a cart but did not complete the purchase'
+                          : activeView === 'intent'
+                          ? 'Aggregated analysis of daily login intent and conversion drops due to unfulfilled orders'
                           : 'Recent customer purchases and order statuses from the production DB'}
                       </CardDescription>
                     </div>
@@ -1082,6 +1256,25 @@ function App() {
                         className="text-xs h-8 px-3"
                       >
                         All Logins
+                      </Button>
+                    </div>
+                  ) : activeView === 'abandoned' ? (
+                    <div className="flex p-1 bg-slate-200/50 rounded-lg w-fit">
+                      <Button
+                        variant={recoveryTab === 'all' ? 'default' : 'ghost'}
+                        size="sm"
+                        onClick={() => setRecoveryTab('all')}
+                        className="text-xs h-8 px-3"
+                      >
+                        All
+                      </Button>
+                      <Button
+                        variant={recoveryTab === 'allowance' ? 'default' : 'ghost'}
+                        size="sm"
+                        onClick={() => setRecoveryTab('allowance')}
+                        className="text-xs h-8 px-3"
+                      >
+                        With Allowance
                       </Button>
                     </div>
                   ) : activeView === 'purchases' ? (
@@ -1154,7 +1347,7 @@ function App() {
                   </div>
                 ) : (
                   <div className="overflow-x-auto">
-                    {activeView === 'logins' ? renderLoginsTable() : activeView === 'funnel' ? renderFunnelTable() : activeView === 'abandoned' ? renderAbandonedTable() : renderPurchasesTable()}
+                    {activeView === 'logins' ? renderLoginsTable() : activeView === 'funnel' ? renderFunnelTable() : activeView === 'abandoned' ? renderAbandonedTable() : activeView === 'intent' ? renderIntentTable() : renderPurchasesTable()}
                   </div>
                 )}
               </CardContent>
@@ -1211,7 +1404,8 @@ function App() {
                         <TableHead className="h-9 text-xs">Order #</TableHead>
                         <TableHead className="h-9 text-xs">Date</TableHead>
                         <TableHead className="h-9 text-xs">Total</TableHead>
-                        <TableHead className="h-9 text-xs text-right">Status</TableHead>
+                        <TableHead className="h-9 text-xs">Payment</TableHead>
+                        <TableHead className="h-9 text-xs text-right">Fulfillment Status</TableHead>
                       </TableRow>
                     </TableHeader>
                     <TableBody>
@@ -1221,13 +1415,16 @@ function App() {
                             <TableCell className="font-bold">#{order.number}</TableCell>
                             <TableCell>{safeFormatDate(order.date)}</TableCell>
                             <TableCell>{order.currency} {order.total.toFixed(2)}</TableCell>
-                            <TableCell className="text-right">
+                            <TableCell>
                               <span className={cn(
                                 "inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-bold uppercase",
                                 order.payment_status === 'FULLY_CHARGED' ? "bg-emerald-100 text-emerald-700" : "bg-red-100 text-red-700"
                               )}>
                                 {order.payment_status === 'FULLY_CHARGED' ? 'Paid' : 'Unpaid'}
                               </span>
+                            </TableCell>
+                            <TableCell className="text-right font-medium text-slate-600">
+                              {order.status.replace(/_/g, ' ')}
                             </TableCell>
                           </TableRow>
                         ))
@@ -1248,6 +1445,47 @@ function App() {
               <p className="text-sm text-destructive">Could not find profile details for this email.</p>
             </div>
           )}
+        </DialogContent>
+      </Dialog>
+      {/* Unfulfilled Lookups Modal */}
+      <Dialog open={isUnfulfilledModalOpen} onOpenChange={setIsUnfulfilledModalOpen}>
+        <DialogContent className="max-w-md max-h-[80vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="text-xl flex items-center gap-2 text-purple-700">
+              <Eye className="h-5 w-5" />
+              Unfulfilled Lookups
+            </DialogTitle>
+            <DialogDescription>
+              Patients who logged in while having an order placed in the last 7 days that is not yet fulfilled.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-2 mt-4">
+            {unfulfilledModalEmails.length > 0 ? (
+              unfulfilledModalEmails.map((email, idx) => (
+                <div 
+                  key={idx} 
+                  className="flex items-center justify-between p-3 bg-slate-50 rounded-lg border border-slate-100 hover:border-purple-200 hover:bg-purple-50 transition-colors group cursor-pointer"
+                  onClick={() => {
+                    setIsUnfulfilledModalOpen(false);
+                    handleCustomerClick(email);
+                  }}
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="h-8 w-8 rounded-full bg-white flex items-center justify-center text-slate-400 group-hover:text-purple-600 shadow-sm border border-slate-100">
+                      <User size={14} />
+                    </div>
+                    <span className="font-mono text-sm text-slate-700 group-hover:text-purple-900">{email}</span>
+                  </div>
+                  <ChevronRight size={14} className="text-slate-300 group-hover:text-purple-400" />
+                </div>
+              ))
+            ) : (
+              <div className="text-center py-12 text-slate-500 italic">
+                No unfulfilled lookups found for this date.
+              </div>
+            )}
+          </div>
         </DialogContent>
       </Dialog>
     </div>
