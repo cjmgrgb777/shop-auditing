@@ -1454,9 +1454,25 @@ function App() {
       <Dialog open={isCustomerModalOpen} onOpenChange={setIsCustomerModalOpen}>
         <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle className="text-xl flex items-center gap-2">
-              <User className="h-5 w-5 text-primary" />
-              Customer Profile
+            <DialogTitle className="text-xl flex items-center gap-3">
+              {activeView === 'logins' && (
+                <Button 
+                  variant="outline" 
+                  size="sm" 
+                  className="h-7 px-2 text-[10px] gap-1 font-bold border-slate-200 hover:bg-slate-50 hover:text-primary transition-all shadow-sm mr-1"
+                  onClick={() => {
+                    setIsCustomerModalOpen(false);
+                    handleZohoClick(selectedCustomer?.email || '');
+                  }}
+                >
+                  <ArrowLeft size={10} />
+                  BACK
+                </Button>
+              )}
+              <div className="flex items-center gap-2">
+                <User className="h-5 w-5 text-primary" />
+                Customer Profile
+              </div>
             </DialogTitle>
             <DialogDescription>
               Viewing purchase history and account details for this patient.
