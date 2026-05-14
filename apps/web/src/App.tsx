@@ -150,17 +150,25 @@ function App() {
         ]);
         
         const purchases = purchasesRes.data;
-        const paidEmails = new Set(
-          purchases
-            .filter((p: any) => p.payment_status === 'FULLY_CHARGED')
-            .map((p: any) => p.email.toLowerCase())
-        );
+        const paidEmails = new Set();
+        const pendingEmails = new Set();
+
+        purchases.forEach((p: any) => {
+          const email = p.email?.toLowerCase().trim();
+          if (!email) return;
+          if (p.payment_status === 'FULLY_CHARGED') {
+            paidEmails.add(email);
+          } else {
+            pendingEmails.add(email);
+          }
+        });
         
         finalData = patientsRes.data.map((patient: any) => {
-          const patientEmail = patient.email.toLowerCase().replace('[at]', '@');
+          const patientEmail = patient.email.toLowerCase().replace('[at]', '@').trim();
           return {
             ...patient,
-            hasPurchased: paidEmails.has(patientEmail)
+            hasPurchased: paidEmails.has(patientEmail),
+            hasUnpaid: pendingEmails.has(patientEmail) && !paidEmails.has(patientEmail)
           };
         });
       } else if (view === 'funnel') {
@@ -617,6 +625,12 @@ function App() {
                     <span className="inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-bold text-emerald-700 w-fit mt-1">
                       <ShoppingCart size={10} className="mr-1" />
                       PURCHASED TODAY
+                    </span>
+                  )}
+                  {patient.hasUnpaid && (
+                    <span className="inline-flex items-center rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-bold text-red-700 w-fit mt-1">
+                      <CreditCard size={10} className="mr-1" />
+                      UNPAID
                     </span>
                   )}
                 </div>
@@ -1607,6 +1621,16 @@ function App() {
                       <a href={selectedZohoPatient.zohoUrl} target="_blank" rel="noopener noreferrer">
                         VIEW IN ZOHO CRM
                       </a>
+                    </Button>
+
+                    <Button 
+                      onClick={() => {
+                        setIsZohoModalOpen(false);
+                        handleCustomerClick(selectedZohoPatient.email);
+                      }}
+                      className="w-full h-12 bg-purple-600 hover:bg-purple-700 text-white font-bold shadow-lg shadow-purple-200 transition-all hover:scale-[1.02] active:scale-[0.98]"
+                    >
+                      VIEW FULL ORDER HISTORY
                     </Button>
 
                     <div className="p-3 bg-slate-50 rounded-lg border border-slate-200 break-all">
