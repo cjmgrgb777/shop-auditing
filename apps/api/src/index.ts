@@ -2,7 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import axios from 'axios';
-import { subDays, format as formatFull, startOfMonth, endOfMonth } from 'date-fns';
+import { subDays, addDays, format as formatFull, startOfMonth, endOfMonth } from 'date-fns';
 import { toZonedTime, format as formatTz } from 'date-fns-tz';
 
 dotenv.config();
@@ -465,7 +465,10 @@ async function getZohoToken() {
 
 app.get('/api/zoho-patient/:email', async (req, res) => {
   const { email } = req.params;
+  const { date } = req.query;
   const ORG_ID = process.env.ZOHO_ORG_ID;
+  const POSTHOG_API_KEY = process.env.POSTHOG_API_KEY;
+  const POSTHOG_PROJECT_ID = process.env.POSTHOG_PROJECT_ID;
   
   try {
     const token = await getZohoToken();
@@ -474,20 +477,61 @@ app.get('/api/zoho-patient/:email', async (req, res) => {
     });
 
     const contact = searchRes.data?.data?.[0];
-    if (contact) {
-      res.json({
-        id: contact.id,
-        name: contact.Full_Name || `${contact.First_Name || ''} ${contact.Last_Name || ''}`.trim(),
-        email: contact.Email,
-        phone: contact.Phone || 'N/A',
-        zohoUrl: `https://crm.zoho.com.au/crm/org${ORG_ID}/tab/Contacts/${contact.id}`
-      });
-    } else {
-      res.status(404).json({ message: 'Patient not found in Zoho' });
+    const patientDetails: any = {
+      id: contact?.id || null,
+      name: contact?.Full_Name || `${contact?.First_Name || ''} ${contact?.Last_Name || ''}`.trim() || 'Not Found',
+      email: contact?.Email || email,
+      phone: contact?.Phone || 'N/A',
+      zohoUrl: contact ? `https://crm.zoho.com.au/crm/org${ORG_ID}/tab/Contacts/${contact.id}` : null,
+      replays: []
+    };
+
+    // Fetch PostHog Replays (Using HogQL for maximum reliability)
+    if (POSTHOG_API_KEY && POSTHOG_PROJECT_ID) {
+      try {
+        const dateStr = date as string;
+        const nextDay = dateStr ? formatFull(addDays(new Date(dateStr), 1), 'yyyy-MM-dd') : null;
+        
+        const hogql = `
+          SELECT DISTINCT properties.$session_id AS session_id, min(timestamp) AS start_time  
+          FROM events  
+          WHERE person.properties.email = '${email}'  
+            AND timestamp >= '${dateStr} 00:00:00'  
+            AND timestamp < '${nextDay} 00:00:00'  
+            AND properties.$session_id IS NOT NULL  
+          GROUP BY session_id  
+          ORDER BY start_time ASC
+        `;
+
+        const phRes = await axios.post(
+          `https://us.posthog.com/api/projects/${POSTHOG_PROJECT_ID}/query/`,
+          {
+            query: {
+              kind: 'HogQLQuery',
+              query: hogql
+            }
+          },
+          {
+            headers: { 'Authorization': `Bearer ${POSTHOG_API_KEY}`, 'Content-Type': 'application/json' }
+          }
+        );
+
+        // phRes.data.results is an array of [session_id, start_time]
+        patientDetails.replays = (phRes.data?.results || []).map((row: any) => ({
+          id: row[0],
+          start_time: row[1],
+          duration: 0, // HogQL query doesn't easily give duration, but the link will work
+          url: `https://us.posthog.com/replay/${row[0]}`
+        }));
+      } catch (phErr: any) {
+        console.error('PostHog HogQL Error:', phErr.response?.data || phErr.message);
+      }
     }
+
+    res.json(patientDetails);
   } catch (error: any) {
     console.error('Zoho API Error:', error.response?.data || error.message);
-    res.status(500).json({ message: 'Error fetching Zoho details' });
+    res.status(500).json({ message: 'Error fetching patient details' });
   }
 });
 

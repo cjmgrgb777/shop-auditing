@@ -294,7 +294,7 @@ function App() {
     setSelectedZohoPatient(null);
     try {
       const cleanEmail = email.includes('[at]') ? email.replace('[at]', '@') : email;
-      const response = await axios.get(`${apiUrl}/api/zoho-patient/${cleanEmail}`);
+      const response = await axios.get(`${apiUrl}/api/zoho-patient/${cleanEmail}?date=${date}`);
       setSelectedZohoPatient(response.data);
     } catch (err) {
       console.error('Error fetching Zoho details:', err);
@@ -1560,70 +1560,111 @@ function App() {
       </Dialog>
       {/* Zoho Patient Details Modal */}
       <Dialog open={isZohoModalOpen} onOpenChange={setIsZohoModalOpen}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
+        <DialogContent className="max-w-2xl max-h-[90vh] flex flex-col p-0 overflow-hidden">
+          <DialogHeader className="p-6 pb-2">
             <DialogTitle className="text-xl flex items-center gap-2">
               <Database className="h-5 w-5 text-orange-600" />
               Zoho Patient Insight
             </DialogTitle>
             <DialogDescription>
-              Direct sync with Zoho CRM profile.
+              Direct sync with Zoho CRM profile and session recordings.
             </DialogDescription>
           </DialogHeader>
 
-          {loadingZoho ? (
-            <div className="flex flex-col items-center justify-center py-12 gap-4">
-              <RefreshCw className="h-8 w-8 animate-spin text-orange-500/40" />
-              <p className="text-sm text-muted-foreground">Searching Zoho CRM...</p>
-            </div>
-          ) : selectedZohoPatient ? (
-            <div className="space-y-6 pt-4">
-              <div className="space-y-4">
-                <div className="p-4 bg-slate-50 rounded-xl border border-slate-200">
-                  <div className="grid grid-cols-1 gap-3">
-                    <div>
-                      <p className="text-[10px] uppercase font-bold text-slate-500">Full Name</p>
-                      <p className="font-bold text-slate-900 text-lg">{selectedZohoPatient.name}</p>
+          <div className="flex-1 overflow-y-auto p-6 pt-2 space-y-6">
+            {loadingZoho ? (
+              <div className="flex flex-col items-center justify-center py-12 gap-4">
+                <RefreshCw className="h-8 w-8 animate-spin text-orange-500/40" />
+                <p className="text-sm text-muted-foreground">Searching systems...</p>
+              </div>
+            ) : selectedZohoPatient ? (
+              <div className="space-y-6">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="space-y-4">
+                    <div className="p-4 bg-slate-50 rounded-xl border border-slate-200 h-full">
+                      <div className="grid grid-cols-1 gap-3">
+                        <div>
+                          <p className="text-[10px] uppercase font-bold text-slate-500">Full Name</p>
+                          <p className="font-bold text-slate-900 text-lg leading-tight">{selectedZohoPatient.name}</p>
+                        </div>
+                        <div>
+                          <p className="text-[10px] uppercase font-bold text-slate-500">Email Address</p>
+                          <p className="font-medium text-slate-700 break-all">{selectedZohoPatient.email}</p>
+                        </div>
+                        <div>
+                          <p className="text-[10px] uppercase font-bold text-slate-500">Phone</p>
+                          <p className="font-medium text-slate-700">{selectedZohoPatient.phone}</p>
+                        </div>
+                      </div>
                     </div>
-                    <div>
-                      <p className="text-[10px] uppercase font-bold text-slate-500">Email Address</p>
-                      <p className="font-medium text-slate-700">{selectedZohoPatient.email}</p>
-                    </div>
-                    <div>
-                      <p className="text-[10px] uppercase font-bold text-slate-500">Phone</p>
-                      <p className="font-medium text-slate-700">{selectedZohoPatient.phone}</p>
+                  </div>
+
+                  <div className="space-y-3">
+                    <Button 
+                      asChild
+                      className="w-full h-12 bg-orange-600 hover:bg-orange-700 text-white font-bold shadow-lg shadow-orange-200 transition-all hover:scale-[1.02] active:scale-[0.98]"
+                    >
+                      <a href={selectedZohoPatient.zohoUrl} target="_blank" rel="noopener noreferrer">
+                        VIEW IN ZOHO CRM
+                      </a>
+                    </Button>
+
+                    <div className="p-3 bg-slate-50 rounded-lg border border-slate-200 break-all">
+                      <p className="text-[10px] uppercase font-bold text-slate-500 mb-1">Direct CRM Link</p>
+                      <p className="text-[10px] font-mono text-slate-600 select-all leading-relaxed">
+                        {selectedZohoPatient.zohoUrl || 'Link not available'}
+                      </p>
                     </div>
                   </div>
                 </div>
 
-                <Button 
-                  asChild
-                  className="w-full h-12 bg-orange-600 hover:bg-orange-700 text-white font-bold shadow-lg shadow-orange-200"
-                >
-                  <a href={selectedZohoPatient.zohoUrl} target="_blank" rel="noopener noreferrer">
-                    VIEW IN ZOHO CRM
-                  </a>
-                </Button>
-
-                <div className="pt-2">
-                  <p className="text-[10px] uppercase font-bold text-slate-500 mb-1">Direct CRM Link</p>
-                  <div className="p-3 bg-slate-100 rounded-lg border border-slate-200 break-all">
-                    <p className="text-[10px] font-mono text-slate-600 select-all">
-                      {selectedZohoPatient.zohoUrl}
-                    </p>
-                  </div>
+                <div className="pt-6 border-t border-slate-100">
+                  <h3 className="text-xs font-bold text-slate-900 mb-4 flex items-center gap-2">
+                    <Activity className="h-4 w-4 text-blue-500" />
+                    PostHog Session Replays ({date})
+                  </h3>
+                  
+                  {selectedZohoPatient.replays && selectedZohoPatient.replays.length > 0 ? (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      {selectedZohoPatient.replays.map((replay: any, idx: number) => (
+                        <a 
+                          key={idx}
+                          href={replay.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex items-center justify-between p-4 bg-blue-50/30 rounded-xl border border-blue-100 hover:bg-blue-50 hover:border-blue-200 transition-all group"
+                        >
+                          <div className="flex flex-col">
+                            <span className="text-[10px] font-bold text-slate-900">
+                              {new Date(replay.start_time).toLocaleTimeString('en-AU', { hour: '2-digit', minute: '2-digit' })}
+                            </span>
+                            {replay.duration > 0 && (
+                              <span className="text-[9px] text-slate-500 uppercase font-bold">
+                                Duration: {Math.floor(replay.duration / 60)}m {Math.round(replay.duration % 60)}s
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-[10px] font-bold text-blue-600 group-hover:underline">WATCH</div>
+                        </a>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="p-4 bg-slate-50 rounded-lg border border-dashed border-slate-200 text-center">
+                      <p className="text-[10px] text-slate-500 italic">No recordings found on this date.</p>
+                    </div>
+                  )}
                 </div>
               </div>
-            </div>
-          ) : (
-            <div className="text-center py-12">
-              <div className="h-12 w-12 bg-red-50 text-red-500 rounded-full flex items-center justify-center mx-auto mb-3">
-                <X size={24} />
+            ) : (
+              <div className="text-center py-12">
+                <div className="h-12 w-12 bg-red-50 text-red-500 rounded-full flex items-center justify-center mx-auto mb-3">
+                  <X size={24} />
+                </div>
+                <p className="text-sm font-bold text-slate-900">Patient Not Found</p>
+                <p className="text-xs text-slate-500 mt-1">This email address could not be matched with a contact in Zoho CRM.</p>
               </div>
-              <p className="text-sm font-bold text-slate-900">Patient Not Found</p>
-              <p className="text-xs text-slate-500 mt-1">This email address could not be matched with a contact in Zoho CRM.</p>
-            </div>
-          )}
+            )}
+          </div>
         </DialogContent>
       </Dialog>
     </div>
