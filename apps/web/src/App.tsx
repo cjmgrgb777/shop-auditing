@@ -23,7 +23,7 @@ import {
   X,
   Activity
 } from 'lucide-react';
-import { format, subDays } from 'date-fns';
+import { format, subDays, formatDistanceToNow } from 'date-fns';
 
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
@@ -64,6 +64,8 @@ interface Patient {
   allowance: number;
   login_time: string;
   hasPurchased?: boolean;
+  hasUnpaid?: boolean;
+  last_order_at?: string;
 }
 
 interface Purchase {
@@ -599,6 +601,14 @@ function App() {
           </TableHead>
           <TableHead>Allowance Interval</TableHead>
           <TableHead 
+            className="text-center cursor-pointer hover:bg-slate-100 transition-colors"
+            onClick={() => requestSort('last_order_at')}
+          >
+            <div className="flex items-center justify-center">
+              Last Order <SortIcon columnKey="last_order_at" />
+            </div>
+          </TableHead>
+          <TableHead 
             className="text-right cursor-pointer hover:bg-slate-100 transition-colors"
             onClick={() => requestSort('login_time')}
           >
@@ -641,6 +651,20 @@ function App() {
                 <Database size={10} className="mr-1.5" />
                 {patient.allowance} remaining
               </div>
+            </TableCell>
+            <TableCell className="text-center">
+              {patient.last_order_at ? (
+                <div className="flex flex-col items-center">
+                  <span className="text-xs font-bold text-slate-900">
+                    {new Date(patient.last_order_at).toLocaleDateString('en-AU', { day: '2-digit', month: 'short' })}
+                  </span>
+                  <span className="text-[10px] text-slate-500 uppercase font-medium">
+                    {formatDistanceToNow(new Date(patient.last_order_at), { addSuffix: true })}
+                  </span>
+                </div>
+              ) : (
+                <span className="text-xs text-slate-400 italic font-medium">No Orders</span>
+              )}
             </TableCell>
             <TableCell className="text-right text-muted-foreground tabular-nums">
               {safeFormatDate(patient.login_time)}

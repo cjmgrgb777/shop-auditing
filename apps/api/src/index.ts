@@ -24,16 +24,27 @@ app.get('/api/patients', async (req, res) => {
   const query = `
     WITH config AS (
         SELECT '${targetDate}'::date AS target_date
+    ),
+    last_orders AS (
+        SELECT 
+            LOWER(email) as email,
+            MAX(created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Australia/Sydney') as last_order_at
+        FROM cart_sessions
+        WHERE is_converted = true
+        GROUP BY 1
     )
     SELECT * FROM (
-      SELECT DISTINCT ON (email)
-          email,
-          supply_remaining_interval AS allowance,
-          created_at AS login_time
-      FROM user_login_supply_tracking, config
-      WHERE (created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Australia/Sydney')::date = config.target_date
+      SELECT DISTINCT ON (l.email)
+          l.email,
+          l.supply_remaining_interval AS allowance,
+          l.created_at AS login_time,
+          o.last_order_at
+      FROM user_login_supply_tracking l
+      LEFT JOIN last_orders o ON LOWER(l.email) = LOWER(o.email)
+      CROSS JOIN config
+      WHERE (l.created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Australia/Sydney')::date = config.target_date
         ${supplyCondition}
-      ORDER BY email, created_at DESC
+      ORDER BY l.email, l.created_at DESC
     ) AS results
     ORDER BY login_time DESC;
   `;
