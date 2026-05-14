@@ -440,6 +440,57 @@ app.get('/api/daily-intent-audit', async (req, res) => {
   }
 });
 
+// Zoho Token Management
+let zohoAccessToken = '';
+let zohoTokenExpiry = 0;
+
+async function getZohoToken() {
+  if (zohoAccessToken && Date.now() < zohoTokenExpiry) {
+    return zohoAccessToken;
+  }
+
+  const response = await axios.post('https://accounts.zoho.com.au/oauth/v2/token', null, {
+    params: {
+      client_id: process.env.ZOHO_CLIENT_ID,
+      client_secret: process.env.ZOHO_CLIENT_SECRET,
+      refresh_token: process.env.ZOHO_REFRESH_TOKEN,
+      grant_type: 'refresh_token'
+    }
+  });
+
+  zohoAccessToken = response.data.access_token;
+  zohoTokenExpiry = Date.now() + (response.data.expires_in - 60) * 1000;
+  return zohoAccessToken;
+}
+
+app.get('/api/zoho-patient/:email', async (req, res) => {
+  const { email } = req.params;
+  const ORG_ID = process.env.ZOHO_ORG_ID;
+  
+  try {
+    const token = await getZohoToken();
+    const searchRes = await axios.get(`https://www.zohoapis.com.au/crm/v6/Contacts/search?email=${email}`, {
+      headers: { 'Authorization': `Zoho-oauthtoken ${token}` }
+    });
+
+    const contact = searchRes.data?.data?.[0];
+    if (contact) {
+      res.json({
+        id: contact.id,
+        name: contact.Full_Name || `${contact.First_Name || ''} ${contact.Last_Name || ''}`.trim(),
+        email: contact.Email,
+        phone: contact.Phone || 'N/A',
+        zohoUrl: `https://crm.zoho.com.au/crm/org${ORG_ID}/tab/Contacts/${contact.id}`
+      });
+    } else {
+      res.status(404).json({ message: 'Patient not found in Zoho' });
+    }
+  } catch (error: any) {
+    console.error('Zoho API Error:', error.response?.data || error.message);
+    res.status(500).json({ message: 'Error fetching Zoho details' });
+  }
+});
+
 const server = app.listen(port, () => {
   console.log(`API server running at http://localhost:${port}`);
   console.log(`Using Reporting Gateway: ${GATEWAY_URL}`);

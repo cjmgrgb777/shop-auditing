@@ -97,6 +97,9 @@ function App() {
   const [sortConfig, setSortConfig] = useState<{ key: string, direction: 'asc' | 'desc' }>({ key: 'purchase_time', direction: 'desc' });
   const [searchQuery, setSearchQuery] = useState('');
   const [chartMetric, setChartMetric] = useState<'traffic' | 'gross'>('traffic');
+  const [isZohoModalOpen, setIsZohoModalOpen] = useState(false);
+  const [selectedZohoPatient, setSelectedZohoPatient] = useState<any>(null);
+  const [loadingZoho, setLoadingZoho] = useState(false);
   const [yesterdayTotal, setYesterdayTotal] = useState<number | null>(null);
   const [yesterdayData, setYesterdayData] = useState<any[]>([]);
   const [dataCache, setDataCache] = useState<Record<string, any>>({});
@@ -284,6 +287,21 @@ function App() {
       t28d: calcNonConv(last28Days)
     };
   }, [data, activeView]);
+
+  const handleZohoClick = async (email: string) => {
+    setLoadingZoho(true);
+    setIsZohoModalOpen(true);
+    setSelectedZohoPatient(null);
+    try {
+      const cleanEmail = email.includes('[at]') ? email.replace('[at]', '@') : email;
+      const response = await axios.get(`${apiUrl}/api/zoho-patient/${cleanEmail}`);
+      setSelectedZohoPatient(response.data);
+    } catch (err) {
+      console.error('Error fetching Zoho details:', err);
+    } finally {
+      setLoadingZoho(false);
+    }
+  };
 
   const handleCustomerClick = async (email: string) => {
     setLoadingCustomer(true);
@@ -585,7 +603,10 @@ function App() {
       <TableBody>
         {filteredData.map((patient: Patient, index) => (
           <TableRow key={index} className="group transition-colors">
-            <TableCell className="font-mono text-sm text-slate-600 font-medium">
+            <TableCell 
+              className="font-mono text-sm text-primary font-medium cursor-pointer hover:underline"
+              onClick={() => handleZohoClick(patient.email)}
+            >
               <div className="flex items-center gap-2">
                 <div className="h-8 w-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-500 group-hover:bg-primary/10 group-hover:text-primary transition-colors">
                   <User size={14} />
@@ -1535,6 +1556,74 @@ function App() {
               </div>
             )}
           </div>
+        </DialogContent>
+      </Dialog>
+      {/* Zoho Patient Details Modal */}
+      <Dialog open={isZohoModalOpen} onOpenChange={setIsZohoModalOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-xl flex items-center gap-2">
+              <Database className="h-5 w-5 text-orange-600" />
+              Zoho Patient Insight
+            </DialogTitle>
+            <DialogDescription>
+              Direct sync with Zoho CRM profile.
+            </DialogDescription>
+          </DialogHeader>
+
+          {loadingZoho ? (
+            <div className="flex flex-col items-center justify-center py-12 gap-4">
+              <RefreshCw className="h-8 w-8 animate-spin text-orange-500/40" />
+              <p className="text-sm text-muted-foreground">Searching Zoho CRM...</p>
+            </div>
+          ) : selectedZohoPatient ? (
+            <div className="space-y-6 pt-4">
+              <div className="space-y-4">
+                <div className="p-4 bg-slate-50 rounded-xl border border-slate-200">
+                  <div className="grid grid-cols-1 gap-3">
+                    <div>
+                      <p className="text-[10px] uppercase font-bold text-slate-500">Full Name</p>
+                      <p className="font-bold text-slate-900 text-lg">{selectedZohoPatient.name}</p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] uppercase font-bold text-slate-500">Email Address</p>
+                      <p className="font-medium text-slate-700">{selectedZohoPatient.email}</p>
+                    </div>
+                    <div>
+                      <p className="text-[10px] uppercase font-bold text-slate-500">Phone</p>
+                      <p className="font-medium text-slate-700">{selectedZohoPatient.phone}</p>
+                    </div>
+                  </div>
+                </div>
+
+                <Button 
+                  asChild
+                  className="w-full h-12 bg-orange-600 hover:bg-orange-700 text-white font-bold shadow-lg shadow-orange-200"
+                >
+                  <a href={selectedZohoPatient.zohoUrl} target="_blank" rel="noopener noreferrer">
+                    VIEW IN ZOHO CRM
+                  </a>
+                </Button>
+
+                <div className="pt-2">
+                  <p className="text-[10px] uppercase font-bold text-slate-500 mb-1">Direct CRM Link</p>
+                  <div className="p-3 bg-slate-100 rounded-lg border border-slate-200 break-all">
+                    <p className="text-[10px] font-mono text-slate-600 select-all">
+                      {selectedZohoPatient.zohoUrl}
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="text-center py-12">
+              <div className="h-12 w-12 bg-red-50 text-red-500 rounded-full flex items-center justify-center mx-auto mb-3">
+                <X size={24} />
+              </div>
+              <p className="text-sm font-bold text-slate-900">Patient Not Found</p>
+              <p className="text-xs text-slate-500 mt-1">This email address could not be matched with a contact in Zoho CRM.</p>
+            </div>
+          )}
         </DialogContent>
       </Dialog>
     </div>
