@@ -297,6 +297,116 @@ app.get('/api/customer/:email', async (req, res) => {
   }
 });
 
+app.get('/api/purchases/history', async (req, res) => {
+  const { date } = req.query;
+  const targetDateStr = (date as string) || new Date().toISOString().split('T')[0];
+  const targetDate = new Date(targetDateStr);
+  const timeZone = 'Australia/Sydney';
+  
+  const SALEOR_URL = process.env.SALEOR_API_URL;
+  const SALEOR_TOKEN = process.env.SALEOR_AUTH_TOKEN;
+
+  try {
+    if (!SALEOR_URL || !SALEOR_TOKEN) throw new Error('Saleor credentials missing');
+
+    const query = `
+      query OrdersByDate($dateStart: Date, $dateEnd: Date) {
+        orders(filter: {created: {gte: $dateStart, lte: $dateEnd}}, first: 100) {
+          edges {
+            node {
+              userEmail
+              paymentStatus
+              total { gross { amount } }
+              created
+            }
+          }
+        }
+      }
+    `;
+
+    const getSydneyDateWindow = (dStr: string) => {
+      const d = new Date(dStr);
+      return [
+        formatFull(subDays(d, 1), 'yyyy-MM-dd'),
+        dStr
+      ];
+    };
+
+    const dateKeys = ['today', 'yesterday', 'ago7d', 'ago28d'];
+    const dateValues = [
+      targetDateStr,
+      formatFull(subDays(targetDate, 1), 'yyyy-MM-dd'),
+      formatFull(subDays(targetDate, 7), 'yyyy-MM-dd'),
+      formatFull(subDays(targetDate, 28), 'yyyy-MM-dd')
+    ];
+
+    const results = await Promise.all(
+      dateValues.map(async (dStr, index) => {
+        const key = dateKeys[index];
+        const [prevUTC, targetUTC] = getSydneyDateWindow(dStr);
+        
+        // Fetch both days to cover Sydney window
+        const [resTarget, resPrev] = await Promise.all([
+          axios.post(SALEOR_URL, { query, variables: { dateStart: targetUTC, dateEnd: targetUTC } }, {
+            headers: { 'Authorization': `Bearer ${SALEOR_TOKEN}`, 'Content-Type': 'application/json' }
+          }),
+          axios.post(SALEOR_URL, { query, variables: { dateStart: prevUTC, dateEnd: prevUTC } }, {
+            headers: { 'Authorization': `Bearer ${SALEOR_TOKEN}`, 'Content-Type': 'application/json' }
+          })
+        ]);
+
+        const combinedOrders = [
+          ...(resTarget.data?.data?.orders?.edges || []),
+          ...(resPrev.data?.data?.orders?.edges || [])
+        ];
+
+        return { key, targetDateStr: dStr, orders: combinedOrders };
+      })
+    );
+
+    const history: Record<string, { today: number, yesterday: number, ago7d: number, ago28d: number }> = {};
+    for (let i = 0; i < 24; i++) {
+      history[i] = { today: 0, yesterday: 0, ago7d: 0, ago28d: 0 };
+    }
+
+    results.forEach(({ key, targetDateStr: dStr, orders }) => {
+      orders.forEach((edge: any) => {
+        const node = edge.node;
+        const email = node.userEmail?.toLowerCase() || '';
+        if (email === 'paprika.test@valstas.com.au') return;
+        if (node.paymentStatus !== 'FULLY_CHARGED') return;
+
+        const createdUtc = new Date(node.created);
+        const sydneyTime = toZonedTime(createdUtc, timeZone);
+        const sydneyDateStr = formatTz(sydneyTime, 'yyyy-MM-dd');
+        const hour = sydneyTime.getHours();
+        const amount = Number(node.total.gross.amount);
+
+        // Only include if it actually falls on the Sydney date we intended for this key
+        if (sydneyDateStr === dStr) {
+          if (key === 'today') history[hour].today += amount;
+          else if (key === 'yesterday') history[hour].yesterday += amount;
+          else if (key === 'ago7d') history[hour].ago7d += amount;
+          else if (key === 'ago28d') history[hour].ago28d += amount;
+        }
+      });
+    });
+
+    const result = Object.entries(history).map(([hour, data]) => ({
+      hour: `${hour}:00`,
+      today: data.today,
+      yesterday: data.yesterday,
+      avg7d: data.ago7d,
+      avg28d: data.ago28d
+    }));
+
+    res.json(result);
+  } catch (error: any) {
+    console.error('Error fetching purchase history:', error.message);
+    res.status(500).json({ error: 'Failed to fetch history' });
+  }
+});
+
 app.get('/api/abandoned-carts', async (req, res) => {
   const { date, withAllowance } = req.query;
   const targetDate = date || new Date().toISOString().split('T')[0];

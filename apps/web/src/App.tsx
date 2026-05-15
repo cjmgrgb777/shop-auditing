@@ -52,7 +52,8 @@ import {
   XAxis, 
   YAxis, 
   Tooltip,
-  CartesianGrid 
+  CartesianGrid,
+  Legend
 } from 'recharts';
 
 const apiUrl = 'http://localhost:3001';
@@ -105,6 +106,7 @@ function App() {
   const [loadingZoho, setLoadingZoho] = useState(false);
   const [yesterdayTotal, setYesterdayTotal] = useState<number | null>(null);
   const [yesterdayData, setYesterdayData] = useState<any[]>([]);
+  const [historicalDistribution, setHistoricalDistribution] = useState<any[]>([]);
   const [dataCache, setDataCache] = useState<Record<string, any>>({});
   
   // Customer details state
@@ -125,6 +127,7 @@ function App() {
       if (view === 'purchases') {
         setYesterdayData(dataCache[cacheKey].yesterdayData || []);
         setYesterdayTotal(dataCache[cacheKey].yesterdayTotal || 0);
+        setHistoricalDistribution(dataCache[cacheKey].historicalDistribution || []);
       }
       // We skip the loading spinner for cached views
     } else {
@@ -140,6 +143,7 @@ function App() {
       let finalData = [];
       let yData = [];
       let yTotal = 0;
+      let historyDistributionData = [];
 
       if (view === 'logins') {
         endpoint = 'patients';
@@ -201,9 +205,10 @@ function App() {
         finalData = results.filter(r => r !== null);
       } else {
         endpoint = 'purchases';
-        const [todayRes, yesterdayRes] = await Promise.all([
+        const [todayRes, yesterdayRes, historyRes] = await Promise.all([
           axios.get(`${apiUrl}/api/${endpoint}?${params}`),
-          axios.get(`${apiUrl}/api/${endpoint}?date=${format(subDays(new Date(targetDate), 1), 'yyyy-MM-dd')}`)
+          axios.get(`${apiUrl}/api/${endpoint}?date=${format(subDays(new Date(targetDate), 1), 'yyyy-MM-dd')}`),
+          axios.get(`${apiUrl}/api/${endpoint}/history?date=${targetDate}`)
         ]);
         
         finalData = todayRes.data;
@@ -214,6 +219,10 @@ function App() {
         
         setYesterdayData(yData);
         setYesterdayTotal(yTotal);
+        historyDistributionData = historyRes.data;
+        setHistoricalDistribution(historyDistributionData);
+        
+        // Use history data to also update yesterdayTotal if needed, but let's keep current logic for now
       }
 
       setData(finalData);
@@ -225,6 +234,7 @@ function App() {
           data: finalData, 
           yesterdayData: yData, 
           yesterdayTotal: yTotal,
+          historicalDistribution: historyDistributionData,
           timestamp: Date.now() 
         } 
       }));
@@ -1138,7 +1148,7 @@ function App() {
 
             {!loading && data.length > 0 && activeView === 'purchases' && (
               <div className="grid gap-6 md:grid-cols-3">
-                <Card className="md:col-span-2 bg-white shadow-sm border-slate-200">
+                <Card className="md:col-span-3 bg-white shadow-sm border-slate-200">
                   <CardHeader className="pb-2 flex flex-row items-center justify-between space-y-0">
                     <div>
                       <CardTitle className="text-sm font-bold flex items-center gap-2">
@@ -1169,12 +1179,6 @@ function App() {
                   <CardContent className="h-[200px] pt-4">
                     {(() => {
                       const timeKey = activeView === 'logins' ? 'login_time' : 'purchase_time';
-                      const chartData = Array.from({ length: 24 }, (_, i) => ({
-                        hour: `${i}:00`,
-                        today: 0,
-                        yesterday: 0
-                      }));
-
                       // Helper to get hour in Sydney timezone
                       const getSydneyHour = (dateStr: string) => {
                         try {
@@ -1190,41 +1194,58 @@ function App() {
                         }
                       };
 
-                      // Process Today's Data
-                      data.forEach(item => {
-                        const hour = getSydneyHour(item[timeKey]);
-                        if (!isNaN(hour) && chartData[hour]) {
-                          if (chartMetric === 'traffic') {
-                            chartData[hour].today++;
-                          } else if (item.payment_status === 'FULLY_CHARGED') {
-                            chartData[hour].today += Number(item.total);
-                          }
-                        }
-                      });
+                      let chartData = Array.from({ length: 24 }, (_, i) => ({
+                        hour: `${i}:00`,
+                        today: 0,
+                        yesterday: 0,
+                        avg7d: 0,
+                        avg28d: 0
+                      }));
 
-                      // Process Yesterday's Data
-                      if (activeView === 'purchases') {
-                        yesterdayData.forEach(item => {
+                      if (chartMetric === 'gross' && historicalDistribution.length > 0) {
+                        // Use pre-calculated distribution for Gross metric
+                        chartData = historicalDistribution.map(item => ({
+                          ...item
+                        }));
+                      } else {
+                        // Process Traffic or fallback for Gross
+                        data.forEach(item => {
                           const hour = getSydneyHour(item[timeKey]);
                           if (!isNaN(hour) && chartData[hour]) {
                             if (chartMetric === 'traffic') {
-                              chartData[hour].yesterday++;
+                              chartData[hour].today++;
                             } else if (item.payment_status === 'FULLY_CHARGED') {
-                              chartData[hour].yesterday += Number(item.total);
+                              chartData[hour].today += Number(item.total);
                             }
                           }
                         });
+
+                        if (activeView === 'purchases') {
+                          yesterdayData.forEach(item => {
+                            const hour = getSydneyHour(item[timeKey]);
+                            if (!isNaN(hour) && chartData[hour]) {
+                              if (chartMetric === 'traffic') {
+                                chartData[hour].yesterday++;
+                              } else if (item.payment_status === 'FULLY_CHARGED') {
+                                chartData[hour].yesterday += Number(item.total);
+                              }
+                            }
+                          });
+                        }
                       }
 
                       // Convert to Cumulative for Gross metric
                       if (chartMetric === 'gross') {
-                        let todayRunningTotal = 0;
-                        let yesterdayRunningTotal = 0;
+                        let tTotal = 0, yTotal = 0, sTotal = 0, twTotal = 0;
                         chartData.forEach(item => {
-                          todayRunningTotal += item.today;
-                          yesterdayRunningTotal += item.yesterday;
-                          item.today = todayRunningTotal;
-                          item.yesterday = yesterdayRunningTotal;
+                          tTotal += item.today;
+                          yTotal += item.yesterday;
+                          sTotal += item.avg7d || 0;
+                          twTotal += item.avg28d || 0;
+                          item.today = tTotal;
+                          item.yesterday = yTotal;
+                          item.avg7d = sTotal;
+                          item.avg28d = twTotal;
                         });
                       }
 
@@ -1237,8 +1258,8 @@ function App() {
                                 <stop offset="95%" stopColor="#3b82f6" stopOpacity={0}/>
                               </linearGradient>
                               <linearGradient id="colorYesterday" x1="0" y1="0" x2="0" y2="1">
-                                <stop offset="5%" stopColor="#cbd5e1" stopOpacity={0.1}/>
-                                <stop offset="95%" stopColor="#cbd5e1" stopOpacity={0}/>
+                                <stop offset="5%" stopColor="#94a3b8" stopOpacity={0.1}/>
+                                <stop offset="95%" stopColor="#94a3b8" stopOpacity={0}/>
                               </linearGradient>
                             </defs>
                             <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
@@ -1256,14 +1277,73 @@ function App() {
                               tickFormatter={(value) => chartMetric === 'gross' ? `$${Math.round(value)}` : value}
                             />
                             <Tooltip 
-                              formatter={(value: any) => chartMetric === 'gross' ? [`$${Number(value).toFixed(2)}`, 'Cumulative Revenue'] : [value, 'Volume']}
+                              itemSorter={(item) => {
+                                const order: Record<string, number> = { 'Today': 1, 'Yesterday': 2, 'avg7d': 3, 'avg28d': 4 };
+                                return order[item.name as string] || 5;
+                              }}
+                              formatter={(value: any, name: string) => {
+                                const formattedValue = chartMetric === 'gross' ? `$${Number(value).toFixed(2)}` : value;
+                                let label = name;
+                                if (name === 'avg7d') label = '7 Days Ago';
+                                if (name === 'avg28d') label = '28 Days Ago';
+                                if (name === 'today') label = 'Today';
+                                if (name === 'yesterday') label = 'Yesterday';
+                                return [formattedValue, label];
+                              }}
                               contentStyle={{ 
-                                borderRadius: '8px', 
-                                border: 'none', 
-                                boxShadow: '0 4px 12px rgba(0,0,0,0.1)',
-                                fontSize: '12px'
+                                borderRadius: '12px', 
+                                border: '1px solid #e2e8f0', 
+                                boxShadow: '0 10px 15px -3px rgba(0,0,0,0.1)',
+                                fontSize: '12px',
+                                fontWeight: '600'
                               }}
                             />
+                            <Legend 
+                              verticalAlign="bottom" 
+                              height={36} 
+                              content={() => (
+                                <div className="flex flex-wrap justify-center gap-x-6 gap-y-2 mt-4">
+                                  <div className="flex items-center gap-2">
+                                    <div className="w-2 h-2 rounded-full bg-[#3b82f6]"></div>
+                                    <span className="text-[11px] font-bold text-slate-600">Today</span>
+                                  </div>
+                                  <div className="flex items-center gap-2">
+                                    <div className="w-2 h-2 rounded-full bg-[#94a3b8]"></div>
+                                    <span className="text-[11px] font-bold text-slate-600">Yesterday</span>
+                                  </div>
+                                  <div className="flex items-center gap-2">
+                                    <div className="w-2 h-2 rounded-full bg-[#f59e0b]"></div>
+                                    <span className="text-[11px] font-bold text-slate-600">7 Days Ago</span>
+                                  </div>
+                                  <div className="flex items-center gap-2">
+                                    <div className="w-2 h-2 rounded-full bg-[#a855f7]"></div>
+                                    <span className="text-[11px] font-bold text-slate-600">28 Days Ago</span>
+                                  </div>
+                                </div>
+                              )}
+                            />
+                            {chartMetric === 'gross' && (
+                              <>
+                                <Area 
+                                  type="linear" 
+                                  dataKey="avg28d" 
+                                  stroke="#a855f7" 
+                                  strokeWidth={2} 
+                                  strokeDasharray="3 3"
+                                  fill="transparent" 
+                                  name="avg28d"
+                                />
+                                <Area 
+                                  type="linear" 
+                                  dataKey="avg7d" 
+                                  stroke="#f59e0b" 
+                                  strokeWidth={2} 
+                                  strokeDasharray="4 4"
+                                  fill="transparent" 
+                                  name="avg7d"
+                                />
+                              </>
+                            )}
                             <Area 
                               type={chartMetric === 'gross' ? "linear" : "monotone"} 
                               dataKey="yesterday" 
@@ -1292,57 +1372,7 @@ function App() {
                   </CardContent>
                 </Card>
 
-                <div className="space-y-4">
-                  <Card className="bg-white shadow-sm border-slate-200">
-                    <CardHeader className="p-4 pb-2">
-                      <CardDescription className="text-[10px] font-bold uppercase">Avg. Frequency</CardDescription>
-                    </CardHeader>
-                    <CardContent className="p-4 pt-0">
-                      {(() => {
-                        const timeKey = activeView === 'logins' ? 'login_time' : 'purchase_time';
-                        const sorted = [...data].map(i => new Date(i[timeKey]).getTime()).sort();
-                        if (sorted.length < 2) return <p className="text-xl font-bold">N/A</p>;
-                        const totalRange = sorted[sorted.length - 1] - sorted[0];
-                        const avg = totalRange / (data.length - 1);
-                        const mins = Math.round(avg / 60000);
-                        return (
-                          <div>
-                            <p className="text-2xl font-black text-slate-900">
-                              {mins < 1 ? '< 1 min' : `${mins} mins`}
-                            </p>
-                            <p className="text-[10px] text-muted-foreground italic">average time between events</p>
-                          </div>
-                        );
-                      })()}
-                    </CardContent>
-                  </Card>
-
-                  <Card className="bg-white shadow-sm border-slate-200">
-                    <CardHeader className="p-4 pb-2">
-                      <CardDescription className="text-[10px] font-bold uppercase">Peak Traffic</CardDescription>
-                    </CardHeader>
-                    <CardContent className="p-4 pt-0">
-                      {(() => {
-                        const timeKey = activeView === 'logins' ? 'login_time' : 'purchase_time';
-                        const counts: Record<number, number> = {};
-                        data.forEach(item => {
-                          const h = new Date(item[timeKey]).getHours();
-                          counts[h] = (counts[h] || 0) + 1;
-                        });
-                        const peak = Object.entries(counts).sort((a, b) => b[1] - a[1])[0];
-                        if (!peak) return <p className="text-xl font-bold">N/A</p>;
-                        return (
-                          <div>
-                            <p className="text-2xl font-black text-slate-900">{peak[0]}:00 - {parseInt(peak[0])+1}:00</p>
-                            <p className="text-[10px] text-muted-foreground italic">with {peak[1]} total events</p>
-                          </div>
-                        );
-                      })()}
-                    </CardContent>
-                  </Card>
-
                 </div>
-              </div>
             )}
             
               <Card className="bg-white border-slate-200 shadow-xl overflow-hidden border-0 animate-in fade-in zoom-in-95 duration-300">
