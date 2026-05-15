@@ -25,9 +25,10 @@ app.get('/api/patients', async (req, res) => {
     WITH config AS (
         SELECT '${targetDate}'::date AS target_date
     ),
-    last_orders AS (
+    order_stats AS (
         SELECT 
             LOWER(email) as email,
+            COUNT(*) as order_count,
             TO_CHAR(MAX(created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Australia/Sydney'), 'YYYY-MM-DD HH24:MI:SS') as last_order_at
         FROM cart_sessions
         WHERE is_converted = true
@@ -46,9 +47,10 @@ app.get('/api/patients', async (req, res) => {
           l.supply_remaining_interval AS allowance,
           TO_CHAR(l.created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Australia/Sydney', 'YYYY-MM-DD HH24:MI:SS') AS login_time,
           o.last_order_at,
+          COALESCE(o.order_count, 0) as order_count,
           tp.tp_date
       FROM user_login_supply_tracking l
-      LEFT JOIN last_orders o ON LOWER(l.email) = LOWER(o.email)
+      LEFT JOIN order_stats o ON LOWER(l.email) = LOWER(o.email)
       LEFT JOIN latest_tp tp ON REPLACE(LOWER(l.email), '[at]', '@') = LOWER(tp.email)
       CROSS JOIN config
       WHERE (l.created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Australia/Sydney')::date = config.target_date

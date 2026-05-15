@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
-import { 
-  Calendar as CalendarIcon, 
-  RefreshCw, 
-  User, 
+import {
+  Calendar as CalendarIcon,
+  RefreshCw,
+  User,
   Database,
   LayoutDashboard,
   Search,
@@ -37,20 +37,20 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-import { 
-  Dialog, 
-  DialogContent, 
-  DialogHeader, 
-  DialogTitle, 
-  DialogDescription 
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription
 } from "@/components/ui/dialog";
 
-import { 
-  ResponsiveContainer, 
-  AreaChart, 
-  Area, 
-  XAxis, 
-  YAxis, 
+import {
+  ResponsiveContainer,
+  AreaChart,
+  Area,
+  XAxis,
+  YAxis,
   Tooltip,
   CartesianGrid,
   Legend
@@ -67,6 +67,7 @@ interface Patient {
   hasPurchased?: boolean;
   hasUnpaid?: boolean;
   last_order_at?: string;
+  order_count?: number;
   tp_date?: string;
 }
 
@@ -108,7 +109,7 @@ function App() {
   const [yesterdayData, setYesterdayData] = useState<any[]>([]);
   const [historicalDistribution, setHistoricalDistribution] = useState<any[]>([]);
   const [dataCache, setDataCache] = useState<Record<string, any>>({});
-  
+
   // Customer details state
   const [selectedCustomer, setSelectedCustomer] = useState<any | null>(null);
   const [isCustomerModalOpen, setIsCustomerModalOpen] = useState(false);
@@ -118,9 +119,9 @@ function App() {
 
   const fetchData = async (view: View, targetDate: string, currentLoginTab: 'all' | 'allowance', currentRecoveryTab: 'all' | 'allowance') => {
     if (view === 'home') return;
-    
+
     const cacheKey = `${view}-${targetDate}-${currentLoginTab}-${currentRecoveryTab}`;
-    
+
     // If we have cached data, show it immediately
     if (dataCache[cacheKey]) {
       setData(dataCache[cacheKey].data);
@@ -150,12 +151,12 @@ function App() {
         if (currentLoginTab === 'allowance') {
           params += '&withAllowance=true';
         }
-        
+
         const [patientsRes, purchasesRes] = await Promise.all([
           axios.get(`${apiUrl}/api/patients?${params}`),
           axios.get(`${apiUrl}/api/purchases?date=${targetDate}`)
         ]);
-        
+
         const purchases = purchasesRes.data;
         const paidEmails = new Set();
         const pendingEmails = new Set();
@@ -169,7 +170,7 @@ function App() {
             pendingEmails.add(email);
           }
         });
-        
+
         finalData = patientsRes.data.map((patient: any) => {
           const patientEmail = patient.email.toLowerCase().replace('[at]', '@').trim();
           return {
@@ -210,33 +211,33 @@ function App() {
           axios.get(`${apiUrl}/api/${endpoint}?date=${format(subDays(new Date(targetDate), 1), 'yyyy-MM-dd')}`),
           axios.get(`${apiUrl}/api/${endpoint}/history?date=${targetDate}`)
         ]);
-        
+
         finalData = todayRes.data;
         yData = yesterdayRes.data;
         yTotal = yesterdayRes.data
           .filter((i: any) => i.payment_status === 'FULLY_CHARGED')
           .reduce((acc: number, i: any) => acc + Number(i.total), 0);
-        
+
         setYesterdayData(yData);
         setYesterdayTotal(yTotal);
         historyDistributionData = historyRes.data;
         setHistoricalDistribution(historyDistributionData);
-        
+
         // Use history data to also update yesterdayTotal if needed, but let's keep current logic for now
       }
 
       setData(finalData);
-      
+
       // Update cache
-      setDataCache(prev => ({ 
-        ...prev, 
-        [cacheKey]: { 
-          data: finalData, 
-          yesterdayData: yData, 
+      setDataCache(prev => ({
+        ...prev,
+        [cacheKey]: {
+          data: finalData,
+          yesterdayData: yData,
           yesterdayTotal: yTotal,
           historicalDistribution: historyDistributionData,
-          timestamp: Date.now() 
-        } 
+          timestamp: Date.now()
+        }
       }));
 
       setSortConfig({ key: view === 'logins' ? 'login_time' : 'purchase_time', direction: 'desc' });
@@ -250,12 +251,12 @@ function App() {
 
   const filteredData = React.useMemo(() => {
     let result = [...data];
-    
+
     // Search filter
     if (searchQuery) {
       const query = searchQuery.toLowerCase();
-      result = result.filter(item => 
-        item.email.toLowerCase().includes(query) || 
+      result = result.filter(item =>
+        item.email.toLowerCase().includes(query) ||
         (item.number && item.number.toString().includes(query))
       );
     }
@@ -275,7 +276,7 @@ function App() {
       result.sort((a, b) => {
         const aValue = a[sortConfig.key];
         const bValue = b[sortConfig.key];
-        
+
         if (aValue < bValue) {
           return sortConfig.direction === 'asc' ? -1 : 1;
         }
@@ -290,7 +291,7 @@ function App() {
 
   const intentMetrics = React.useMemo(() => {
     if (activeView !== 'intent' || data.length === 0) return null;
-    
+
     // data is already sorted by date desc
     const today = data[0];
     const last7Days = data.slice(0, 7);
@@ -351,15 +352,15 @@ function App() {
   const handleExport = () => {
     if (filteredData.length === 0) return;
 
-    const headers = activeView === 'logins' 
-      ? ['Email', 'Allowance Remaining', 'Last Order', 'TP Date', 'Login Time', 'Purchased Today']
+    const headers = activeView === 'logins'
+      ? ['Email', 'Allowance Remaining', '# of Orders', 'Last Order', 'TP Date', 'Login Time', 'Purchased Today']
       : activeView === 'funnel'
-      ? ['Email', 'Viewed Product', 'Added to Cart', 'Removed from Cart', 'Checkout', 'Last Activity']
-      : activeView === 'abandoned'
-      ? ['Email', 'Allowance Remaining', 'Cart Created (Sydney)']
-      : activeView === 'intent'
-      ? ['Date', 'Total Logins', 'Logins With Allowance', 'Total Orders', 'Did Not Buy', 'Non-Conversion %', 'Unfulfilled Lookups']
-      : ['Order Number', 'Email', 'Total', 'Currency', 'Status', 'Purchase Time'];
+        ? ['Email', 'Viewed Product', 'Added to Cart', 'Removed from Cart', 'Checkout', 'Last Activity']
+        : activeView === 'abandoned'
+          ? ['Email', 'Allowance Remaining', 'Cart Created (Sydney)']
+          : activeView === 'intent'
+            ? ['Date', 'Total Logins', 'Logins With Allowance', 'Total Orders', 'Did Not Buy', 'Non-Conversion %', 'Unfulfilled Lookups']
+            : ['Order Number', 'Email', 'Total', 'Currency', 'Status', 'Purchase Time'];
 
     const csvContent = [
       headers.join(','),
@@ -368,6 +369,7 @@ function App() {
           return [
             item.email,
             item.allowance,
+            item.order_count || 0,
             item.last_order_at ? format(new Date(item.last_order_at), 'yyyy-MM-dd') : 'N/A',
             item.tp_date ? format(new Date(item.tp_date), 'yyyy-MM-dd') : 'N/A',
             format(new Date(item.login_time), 'yyyy-MM-dd HH:mm:ss'),
@@ -440,7 +442,7 @@ function App() {
 
       <div className="grid gap-6 md:grid-cols-2 max-w-4xl mx-auto">
         {/* Login Audit Card */}
-        <Card 
+        <Card
           className="group cursor-pointer border-2 border-transparent hover:border-primary/20 transition-all hover:shadow-xl bg-white"
           onClick={() => enterView('logins')}
         >
@@ -459,7 +461,7 @@ function App() {
         </Card>
 
         {/* Purchase Audit Card */}
-        <Card 
+        <Card
           className="group cursor-pointer border-2 border-transparent hover:border-primary/20 transition-all hover:shadow-xl bg-white"
           onClick={() => enterView('purchases')}
         >
@@ -478,7 +480,7 @@ function App() {
         </Card>
 
         {/* Shop Funnel Audit Card */}
-        <Card 
+        <Card
           className="group cursor-pointer border-2 border-transparent hover:border-primary/20 transition-all hover:shadow-xl bg-white"
           onClick={() => enterView('funnel')}
         >
@@ -497,7 +499,7 @@ function App() {
         </Card>
 
         {/* Recovery Audit (Abandoned Carts) */}
-        <Card 
+        <Card
           className="group cursor-pointer border-2 border-transparent hover:border-orange-500/20 transition-all hover:shadow-xl bg-white"
           onClick={() => enterView('abandoned')}
         >
@@ -516,7 +518,7 @@ function App() {
         </Card>
 
         {/* Order Intent Audit */}
-        <Card 
+        {/* <Card 
           className="group cursor-pointer border-2 border-transparent hover:border-purple-500/20 transition-all hover:shadow-xl bg-white"
           onClick={() => enterView('intent')}
         >
@@ -532,7 +534,7 @@ function App() {
               View Order Intent <ChevronRight size={16} className="ml-1" />
             </div>
           </CardFooter>
-        </Card>
+        </Card> */}
       </div>
 
       {/* Quick Stats Summary */}
@@ -568,24 +570,24 @@ function App() {
 
   const SortIcon = ({ columnKey }: { columnKey: string }) => {
     if (sortConfig.key !== columnKey) return <ArrowUpDown size={14} className="ml-1 opacity-20" />;
-    return sortConfig.direction === 'asc' 
-      ? <ArrowUp size={14} className="ml-1 text-primary" /> 
+    return sortConfig.direction === 'asc'
+      ? <ArrowUp size={14} className="ml-1 text-primary" />
       : <ArrowDown size={14} className="ml-1 text-primary" />;
   };
 
   const safeFormatDate = (dateStr: string) => {
     try {
       if (!dateStr) return 'N/A';
-      
+
       // Ensure strings like "2026-05-12 14:30:00" are treated as UTC by the browser
       let normalizedDateStr = dateStr;
       if (typeof dateStr === 'string' && !dateStr.includes('Z') && !/[+-]\d{2}:\d{2}$/.test(dateStr)) {
         normalizedDateStr = dateStr.replace(' ', 'T') + 'Z';
       }
-      
+
       const dateObj = new Date(normalizedDateStr);
       if (isNaN(dateObj.getTime())) return 'Invalid Date';
-      
+
       return new Intl.DateTimeFormat('en-AU', {
         month: 'short',
         day: '2-digit',
@@ -604,7 +606,7 @@ function App() {
     <Table>
       <TableHeader>
         <TableRow className="bg-slate-50/30">
-          <TableHead 
+          <TableHead
             className="w-[350px] cursor-pointer hover:bg-slate-100 transition-colors"
             onClick={() => requestSort('email')}
           >
@@ -613,7 +615,15 @@ function App() {
             </div>
           </TableHead>
           <TableHead>Allowance Interval</TableHead>
-          <TableHead 
+          <TableHead
+            className="text-center cursor-pointer hover:bg-slate-100 transition-colors"
+            onClick={() => requestSort('order_count')}
+          >
+            <div className="flex items-center justify-center">
+              # of Orders <SortIcon columnKey="order_count" />
+            </div>
+          </TableHead>
+          <TableHead
             className="text-center cursor-pointer hover:bg-slate-100 transition-colors"
             onClick={() => requestSort('last_order_at')}
           >
@@ -621,7 +631,7 @@ function App() {
               Last Order <SortIcon columnKey="last_order_at" />
             </div>
           </TableHead>
-          <TableHead 
+          <TableHead
             className="text-center cursor-pointer hover:bg-slate-100 transition-colors"
             onClick={() => requestSort('tp_date')}
           >
@@ -629,7 +639,7 @@ function App() {
               TP Date <SortIcon columnKey="tp_date" />
             </div>
           </TableHead>
-          <TableHead 
+          <TableHead
             className="text-right cursor-pointer hover:bg-slate-100 transition-colors"
             onClick={() => requestSort('login_time')}
           >
@@ -642,7 +652,7 @@ function App() {
       <TableBody>
         {filteredData.map((patient: Patient, index) => (
           <TableRow key={index} className="group transition-colors">
-            <TableCell 
+            <TableCell
               className="font-mono text-sm text-primary font-medium cursor-pointer hover:underline"
               onClick={() => handleZohoClick(patient.email)}
             >
@@ -672,6 +682,9 @@ function App() {
                 <Database size={10} className="mr-1.5" />
                 {patient.allowance} remaining
               </div>
+            </TableCell>
+            <TableCell className="text-center">
+              <span className="font-bold text-slate-700">{patient.order_count || 0}</span>
             </TableCell>
             <TableCell className="text-center">
               {patient.last_order_at ? (
@@ -707,7 +720,7 @@ function App() {
     <Table>
       <TableHeader>
         <TableRow className="bg-slate-50/30">
-          <TableHead 
+          <TableHead
             className="w-[120px] cursor-pointer hover:bg-slate-100 transition-colors"
             onClick={() => requestSort('number')}
           >
@@ -715,7 +728,7 @@ function App() {
               Order # <SortIcon columnKey="number" />
             </div>
           </TableHead>
-          <TableHead 
+          <TableHead
             className="w-[280px] cursor-pointer hover:bg-slate-100 transition-colors"
             onClick={() => requestSort('email')}
           >
@@ -725,7 +738,7 @@ function App() {
           </TableHead>
           <TableHead>Total</TableHead>
           <TableHead>Status</TableHead>
-          <TableHead 
+          <TableHead
             className="text-right cursor-pointer hover:bg-slate-100 transition-colors"
             onClick={() => requestSort('purchase_time')}
           >
@@ -741,7 +754,7 @@ function App() {
             <TableCell className="font-mono text-sm font-bold text-slate-900">
               #{purchase.number}
             </TableCell>
-            <TableCell 
+            <TableCell
               className="font-mono text-sm text-primary font-medium cursor-pointer hover:underline"
               onClick={() => handleCustomerClick(purchase.email)}
             >
@@ -783,7 +796,7 @@ function App() {
     <Table>
       <TableHeader>
         <TableRow className="bg-slate-50/30">
-          <TableHead 
+          <TableHead
             className="w-[300px] cursor-pointer hover:bg-slate-100 transition-colors"
             onClick={() => requestSort('email')}
           >
@@ -795,7 +808,7 @@ function App() {
           <TableHead className="text-center">Added to Cart</TableHead>
           <TableHead className="text-center">Removed</TableHead>
           <TableHead className="text-center">Checkout</TableHead>
-          <TableHead 
+          <TableHead
             className="text-right cursor-pointer hover:bg-slate-100 transition-colors"
             onClick={() => requestSort('login_time')}
           >
@@ -841,7 +854,7 @@ function App() {
     <Table>
       <TableHeader>
         <TableRow className="bg-slate-50/30">
-          <TableHead 
+          <TableHead
             className="cursor-pointer hover:bg-slate-100 transition-colors"
             onClick={() => requestSort('email')}
           >
@@ -884,47 +897,47 @@ function App() {
     <div className="space-y-6">
       {intentMetrics && (
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 p-4 bg-slate-50/50 border-b">
-           {/* Metric Card 24H */}
-           <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex items-center justify-between">
-              <div>
-                <p className="text-[10px] uppercase font-bold text-slate-500 mb-1">Non-Conversion (Today)</p>
-                <p className="text-2xl font-black text-slate-900">{intentMetrics.t24h}%</p>
-              </div>
-              <div className={cn(
-                "h-10 w-10 rounded-full flex items-center justify-center",
-                intentMetrics.t24h > 70 ? "bg-red-100 text-red-600" : "bg-blue-100 text-blue-600"
-              )}>
-                <Activity size={20} />
-              </div>
-           </div>
+          {/* Metric Card 24H */}
+          <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex items-center justify-between">
+            <div>
+              <p className="text-[10px] uppercase font-bold text-slate-500 mb-1">Non-Conversion (Today)</p>
+              <p className="text-2xl font-black text-slate-900">{intentMetrics.t24h}%</p>
+            </div>
+            <div className={cn(
+              "h-10 w-10 rounded-full flex items-center justify-center",
+              intentMetrics.t24h > 70 ? "bg-red-100 text-red-600" : "bg-blue-100 text-blue-600"
+            )}>
+              <Activity size={20} />
+            </div>
+          </div>
 
-           {/* Metric Card 7D */}
-           <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex items-center justify-between">
-              <div>
-                <p className="text-[10px] uppercase font-bold text-slate-500 mb-1">Avg Non-Conversion (7D)</p>
-                <p className="text-2xl font-black text-slate-900">{intentMetrics.t7d}%</p>
-              </div>
-              <div className={cn(
-                "h-10 w-10 rounded-full flex items-center justify-center",
-                intentMetrics.t7d > 70 ? "bg-red-100 text-red-600" : "bg-blue-100 text-blue-600"
-              )}>
-                <Activity size={20} />
-              </div>
-           </div>
+          {/* Metric Card 7D */}
+          <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex items-center justify-between">
+            <div>
+              <p className="text-[10px] uppercase font-bold text-slate-500 mb-1">Avg Non-Conversion (7D)</p>
+              <p className="text-2xl font-black text-slate-900">{intentMetrics.t7d}%</p>
+            </div>
+            <div className={cn(
+              "h-10 w-10 rounded-full flex items-center justify-center",
+              intentMetrics.t7d > 70 ? "bg-red-100 text-red-600" : "bg-blue-100 text-blue-600"
+            )}>
+              <Activity size={20} />
+            </div>
+          </div>
 
-           {/* Metric Card 28D */}
-           <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex items-center justify-between">
-              <div>
-                <p className="text-[10px] uppercase font-bold text-slate-500 mb-1">Avg Non-Conversion (28D)</p>
-                <p className="text-2xl font-black text-slate-900">{intentMetrics.t28d}%</p>
-              </div>
-              <div className={cn(
-                "h-10 w-10 rounded-full flex items-center justify-center",
-                intentMetrics.t28d > 70 ? "bg-red-100 text-red-600" : "bg-blue-100 text-blue-600"
-              )}>
-                <Activity size={20} />
-              </div>
-           </div>
+          {/* Metric Card 28D */}
+          <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-sm flex items-center justify-between">
+            <div>
+              <p className="text-[10px] uppercase font-bold text-slate-500 mb-1">Avg Non-Conversion (28D)</p>
+              <p className="text-2xl font-black text-slate-900">{intentMetrics.t28d}%</p>
+            </div>
+            <div className={cn(
+              "h-10 w-10 rounded-full flex items-center justify-center",
+              intentMetrics.t28d > 70 ? "bg-red-100 text-red-600" : "bg-blue-100 text-blue-600"
+            )}>
+              <Activity size={20} />
+            </div>
+          </div>
         </div>
       )}
       <div className="overflow-hidden">
@@ -957,7 +970,7 @@ function App() {
                   </span>
                 </TableCell>
                 <TableCell className="text-right font-bold text-purple-700">
-                  <button 
+                  <button
                     className="hover:underline cursor-pointer"
                     onClick={() => {
                       setUnfulfilledModalEmails(item.unfulfilled_lookups_emails || []);
@@ -982,9 +995,9 @@ function App() {
         <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
           <div className="flex items-center gap-3">
             {activeView !== 'home' && (
-              <Button 
-                variant="ghost" 
-                size="icon" 
+              <Button
+                variant="ghost"
+                size="icon"
                 onClick={() => setActiveView('home')}
                 className="rounded-full hover:bg-white shadow-sm mr-2"
               >
@@ -1010,17 +1023,17 @@ function App() {
             <div className="flex items-center gap-2 animate-in fade-in slide-in-from-right-4">
               <div className="relative">
                 <CalendarIcon className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                <Input 
-                  type="date" 
-                  value={date} 
+                <Input
+                  type="date"
+                  value={date}
                   max={activeView === 'intent' ? format(subDays(new Date(), 1), 'yyyy-MM-dd') : undefined}
                   onChange={handleDateChange}
                   className="pl-9 w-[180px] bg-white shadow-sm border-slate-200"
                 />
               </div>
-              <Button 
-                variant="outline" 
-                size="icon" 
+              <Button
+                variant="outline"
+                size="icon"
                 onClick={() => fetchData(activeView, date, loginTab, recoveryTab)}
                 className={cn("bg-white shadow-sm border-slate-200", loading && "animate-spin")}
               >
@@ -1081,14 +1094,14 @@ function App() {
               const paidEmails = new Set(paidItems.map(i => i.email));
               const totalPaid = paidItems.reduce((acc, i) => acc + Number(i.total), 0);
               const totalUnpaid = data.filter(i => i.payment_status !== 'FULLY_CHARGED' && !paidEmails.has(i.email)).reduce((acc, i) => acc + Number(i.total), 0);
-              
+
               const avgOrderValue = paidItems.length > 0 ? totalPaid / paidItems.length : 0;
               let yesterdayAov = null;
               if (yesterdayTotal !== null && yesterdayData && yesterdayData.length > 0) {
                 const yPaidCount = yesterdayData.filter((i: any) => i.payment_status === 'FULLY_CHARGED').length;
                 yesterdayAov = yPaidCount > 0 ? yesterdayTotal / yPaidCount : 0;
               }
-              
+
               return (
                 <div className="grid gap-4 md:grid-cols-3 animate-in fade-in slide-in-from-top-4 duration-500">
                   <Card className="bg-white border-emerald-100 shadow-sm">
@@ -1158,17 +1171,17 @@ function App() {
                       <CardDescription className="text-[10px]">Comparing hourly {chartMetric === 'traffic' ? 'volume' : 'revenue'} vs yesterday</CardDescription>
                     </div>
                     <div className="flex p-0.5 bg-slate-100 rounded-md border border-slate-200">
-                      <Button 
-                        variant={chartMetric === 'traffic' ? 'default' : 'ghost'} 
-                        size="sm" 
+                      <Button
+                        variant={chartMetric === 'traffic' ? 'default' : 'ghost'}
+                        size="sm"
                         className={cn("h-6 text-[10px] px-2 rounded-sm", chartMetric === 'traffic' ? "bg-white text-primary shadow-sm hover:bg-white" : "text-slate-500 hover:text-slate-900")}
                         onClick={() => setChartMetric('traffic')}
                       >
                         Traffic
                       </Button>
-                      <Button 
-                        variant={chartMetric === 'gross' ? 'default' : 'ghost'} 
-                        size="sm" 
+                      <Button
+                        variant={chartMetric === 'gross' ? 'default' : 'ghost'}
+                        size="sm"
                         className={cn("h-6 text-[10px] px-2 rounded-sm", chartMetric === 'gross' ? "bg-white text-primary shadow-sm hover:bg-white" : "text-slate-500 hover:text-slate-900")}
                         onClick={() => setChartMetric('gross')}
                       >
@@ -1254,29 +1267,29 @@ function App() {
                           <AreaChart data={chartData}>
                             <defs>
                               <linearGradient id="colorToday" x1="0" y1="0" x2="0" y2="1">
-                                <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.3}/>
-                                <stop offset="95%" stopColor="#3b82f6" stopOpacity={0}/>
+                                <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.3} />
+                                <stop offset="95%" stopColor="#3b82f6" stopOpacity={0} />
                               </linearGradient>
                               <linearGradient id="colorYesterday" x1="0" y1="0" x2="0" y2="1">
-                                <stop offset="5%" stopColor="#94a3b8" stopOpacity={0.1}/>
-                                <stop offset="95%" stopColor="#94a3b8" stopOpacity={0}/>
+                                <stop offset="5%" stopColor="#94a3b8" stopOpacity={0.1} />
+                                <stop offset="95%" stopColor="#94a3b8" stopOpacity={0} />
                               </linearGradient>
                             </defs>
                             <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                            <XAxis 
-                              dataKey="hour" 
-                              fontSize={10} 
-                              tickLine={false} 
+                            <XAxis
+                              dataKey="hour"
+                              fontSize={10}
+                              tickLine={false}
                               axisLine={false}
                               interval={3}
                             />
-                            <YAxis 
-                              fontSize={10} 
-                              tickLine={false} 
-                              axisLine={false} 
+                            <YAxis
+                              fontSize={10}
+                              tickLine={false}
+                              axisLine={false}
                               tickFormatter={(value) => chartMetric === 'gross' ? `$${Math.round(value)}` : value}
                             />
-                            <Tooltip 
+                            <Tooltip
                               itemSorter={(item) => {
                                 const order: Record<string, number> = { 'Today': 1, 'Yesterday': 2, 'avg7d': 3, 'avg28d': 4 };
                                 return order[item.name as string] || 5;
@@ -1290,17 +1303,17 @@ function App() {
                                 if (name === 'yesterday') label = 'Yesterday';
                                 return [formattedValue, label];
                               }}
-                              contentStyle={{ 
-                                borderRadius: '12px', 
-                                border: '1px solid #e2e8f0', 
+                              contentStyle={{
+                                borderRadius: '12px',
+                                border: '1px solid #e2e8f0',
                                 boxShadow: '0 10px 15px -3px rgba(0,0,0,0.1)',
                                 fontSize: '12px',
                                 fontWeight: '600'
                               }}
                             />
-                            <Legend 
-                              verticalAlign="bottom" 
-                              height={36} 
+                            <Legend
+                              verticalAlign="bottom"
+                              height={36}
                               content={() => (
                                 <div className="flex flex-wrap justify-center gap-x-6 gap-y-2 mt-4">
                                   <div className="flex items-center gap-2">
@@ -1324,44 +1337,44 @@ function App() {
                             />
                             {chartMetric === 'gross' && (
                               <>
-                                <Area 
-                                  type="linear" 
-                                  dataKey="avg28d" 
-                                  stroke="#a855f7" 
-                                  strokeWidth={2} 
+                                <Area
+                                  type="linear"
+                                  dataKey="avg28d"
+                                  stroke="#a855f7"
+                                  strokeWidth={2}
                                   strokeDasharray="3 3"
-                                  fill="transparent" 
+                                  fill="transparent"
                                   name="avg28d"
                                 />
-                                <Area 
-                                  type="linear" 
-                                  dataKey="avg7d" 
-                                  stroke="#f59e0b" 
-                                  strokeWidth={2} 
+                                <Area
+                                  type="linear"
+                                  dataKey="avg7d"
+                                  stroke="#f59e0b"
+                                  strokeWidth={2}
                                   strokeDasharray="4 4"
-                                  fill="transparent" 
+                                  fill="transparent"
                                   name="avg7d"
                                 />
                               </>
                             )}
-                            <Area 
-                              type={chartMetric === 'gross' ? "linear" : "monotone"} 
-                              dataKey="yesterday" 
-                              stroke="#94a3b8" 
+                            <Area
+                              type={chartMetric === 'gross' ? "linear" : "monotone"}
+                              dataKey="yesterday"
+                              stroke="#94a3b8"
                               strokeWidth={2}
                               strokeDasharray="5 5"
-                              fillOpacity={1} 
-                              fill="url(#colorYesterday)" 
+                              fillOpacity={1}
+                              fill="url(#colorYesterday)"
                               name="Yesterday"
                               connectNulls
                             />
-                            <Area 
-                              type={chartMetric === 'gross' ? "linear" : "monotone"} 
-                              dataKey="today" 
-                              stroke="#3b82f6" 
+                            <Area
+                              type={chartMetric === 'gross' ? "linear" : "monotone"}
+                              dataKey="today"
+                              stroke="#3b82f6"
                               strokeWidth={3}
-                              fillOpacity={1} 
-                              fill="url(#colorToday)" 
+                              fillOpacity={1}
+                              fill="url(#colorToday)"
                               name="Today"
                               connectNulls
                             />
@@ -1372,34 +1385,34 @@ function App() {
                   </CardContent>
                 </Card>
 
-                </div>
+              </div>
             )}
-            
-              <Card className="bg-white border-slate-200 shadow-xl overflow-hidden border-0 animate-in fade-in zoom-in-95 duration-300">
-                <CardHeader className="border-b bg-slate-50/50 py-4 px-6">
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <CardTitle className="text-lg font-bold flex items-center gap-2">
-                        {activeView === 'logins' ? <User className="h-5 w-5 text-primary" /> : activeView === 'funnel' ? <TrendingUp className="h-5 w-5 text-orange-600" /> : activeView === 'abandoned' ? <ShoppingCart className="h-5 w-5 text-orange-600" /> : activeView === 'intent' ? <Eye className="h-5 w-5 text-purple-600" /> : <ShoppingCart className="h-5 w-5 text-emerald-600" />}
-                        {activeView === 'logins' ? 'Login Audit Trail' : activeView === 'funnel' ? 'Customer Funnel Activity' : activeView === 'abandoned' ? 'Abandoned Cart Recovery' : activeView === 'intent' ? 'Order Intent Statistics' : 'Purchase Audit Trail'}
-                        {!loading && (
-                          <span className="inline-flex items-center rounded-md bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-600 ring-1 ring-inset ring-slate-500/10">
-                            {filteredData.length} records
-                          </span>
-                        )}
-                      </CardTitle>
-                      <CardDescription className="text-xs">
-                        {activeView === 'logins' 
-                          ? 'Real-time patient login activity and supply tracking' 
-                          : activeView === 'funnel'
+
+            <Card className="bg-white border-slate-200 shadow-xl overflow-hidden border-0 animate-in fade-in zoom-in-95 duration-300">
+              <CardHeader className="border-b bg-slate-50/50 py-4 px-6">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <CardTitle className="text-lg font-bold flex items-center gap-2">
+                      {activeView === 'logins' ? <User className="h-5 w-5 text-primary" /> : activeView === 'funnel' ? <TrendingUp className="h-5 w-5 text-orange-600" /> : activeView === 'abandoned' ? <ShoppingCart className="h-5 w-5 text-orange-600" /> : activeView === 'intent' ? <Eye className="h-5 w-5 text-purple-600" /> : <ShoppingCart className="h-5 w-5 text-emerald-600" />}
+                      {activeView === 'logins' ? 'Login Audit Trail' : activeView === 'funnel' ? 'Customer Funnel Activity' : activeView === 'abandoned' ? 'Abandoned Cart Recovery' : activeView === 'intent' ? 'Order Intent Statistics' : 'Purchase Audit Trail'}
+                      {!loading && (
+                        <span className="inline-flex items-center rounded-md bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-600 ring-1 ring-inset ring-slate-500/10">
+                          {filteredData.length} records
+                        </span>
+                      )}
+                    </CardTitle>
+                    <CardDescription className="text-xs">
+                      {activeView === 'logins'
+                        ? 'Real-time patient login activity and supply tracking'
+                        : activeView === 'funnel'
                           ? 'End-to-end customer journey tracking from product view to checkout'
                           : activeView === 'abandoned'
-                          ? 'List of users who started a cart but did not complete the purchase'
-                          : activeView === 'intent'
-                          ? 'Aggregated analysis of daily login intent and conversion drops due to unfulfilled orders'
-                          : 'Recent customer purchases and order statuses from the production DB'}
-                      </CardDescription>
-                    </div>
+                            ? 'List of users who started a cart but did not complete the purchase'
+                            : activeView === 'intent'
+                              ? 'Aggregated analysis of daily login intent and conversion drops due to unfulfilled orders'
+                              : 'Recent customer purchases and order statuses from the production DB'}
+                    </CardDescription>
+                  </div>
                   {activeView === 'logins' ? (
                     <div className="flex p-1 bg-slate-200/50 rounded-lg w-fit">
                       <Button
@@ -1528,9 +1541,9 @@ function App() {
           <DialogHeader>
             <DialogTitle className="text-xl flex items-center gap-3">
               {activeView === 'logins' && (
-                <Button 
-                  variant="outline" 
-                  size="sm" 
+                <Button
+                  variant="outline"
+                  size="sm"
                   className="h-7 px-2 text-[10px] gap-1 font-bold border-slate-200 hover:bg-slate-50 hover:text-primary transition-all shadow-sm mr-1"
                   onClick={() => {
                     setIsCustomerModalOpen(false);
@@ -1640,8 +1653,8 @@ function App() {
           <div className="space-y-2 mt-4">
             {unfulfilledModalEmails.length > 0 ? (
               unfulfilledModalEmails.map((email, idx) => (
-                <div 
-                  key={idx} 
+                <div
+                  key={idx}
                   className="flex items-center justify-between p-3 bg-slate-50 rounded-lg border border-slate-100 group"
                 >
                   <div className="flex items-center gap-3">
@@ -1702,7 +1715,7 @@ function App() {
                   </div>
 
                   <div className="space-y-3">
-                    <Button 
+                    <Button
                       asChild
                       className="w-full h-12 bg-orange-600 hover:bg-orange-700 text-white font-bold shadow-lg shadow-orange-200 transition-all hover:scale-[1.02] active:scale-[0.98]"
                     >
@@ -1711,7 +1724,7 @@ function App() {
                       </a>
                     </Button>
 
-                    <Button 
+                    <Button
                       onClick={() => {
                         setIsZohoModalOpen(false);
                         handleCustomerClick(selectedZohoPatient.email);
@@ -1735,11 +1748,11 @@ function App() {
                     <Activity className="h-4 w-4 text-blue-500" />
                     PostHog Session Replays ({date})
                   </h3>
-                  
+
                   {selectedZohoPatient.replays && selectedZohoPatient.replays.length > 0 ? (
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       {selectedZohoPatient.replays.map((replay: any, idx: number) => (
-                        <a 
+                        <a
                           key={idx}
                           href={replay.url}
                           target="_blank"
