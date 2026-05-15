@@ -524,17 +524,21 @@ app.get('/api/zoho-patient/:email', async (req, res) => {
     if (POSTHOG_API_KEY && POSTHOG_PROJECT_ID) {
       try {
         const dateStr = date as string;
-        const nextDay = dateStr ? formatFull(addDays(new Date(dateStr), 1), 'yyyy-MM-dd') : null;
+        const startDate = new Date(dateStr);
+        // Expand window to cover Sydney timezone offset (AEST/AEDT)
+        // 12:00 PM previous day UTC to 12:00 PM next day UTC covers the full Sydney day
+        const startTime = `${formatFull(subDays(startDate, 1), 'yyyy-MM-dd')} 12:00:00`;
+        const endTime = `${formatFull(addDays(startDate, 1), 'yyyy-MM-dd')} 12:00:00`;
         
         const hogql = `
           SELECT DISTINCT properties.$session_id AS session_id, min(timestamp) AS start_time  
           FROM events  
           WHERE person.properties.email = '${email}'  
-            AND timestamp >= '${dateStr} 00:00:00'  
-            AND timestamp < '${nextDay} 00:00:00'  
+            AND timestamp >= '${startTime}'  
+            AND timestamp < '${endTime}'  
             AND properties.$session_id IS NOT NULL  
           GROUP BY session_id  
-          ORDER BY start_time ASC
+          ORDER BY start_time DESC
         `;
 
         const phRes = await axios.post(
