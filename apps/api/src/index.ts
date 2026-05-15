@@ -28,19 +28,28 @@ app.get('/api/patients', async (req, res) => {
     last_orders AS (
         SELECT 
             LOWER(email) as email,
-            MAX(created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Australia/Sydney') as last_order_at
+            TO_CHAR(MAX(created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Australia/Sydney'), 'YYYY-MM-DD HH24:MI:SS') as last_order_at
         FROM cart_sessions
         WHERE is_converted = true
+        GROUP BY 1
+    ),
+    latest_tp AS (
+        SELECT 
+            LOWER(email) as email,
+            TO_CHAR(MAX("createdAt" AT TIME ZONE 'UTC' AT TIME ZONE 'Australia/Sydney'), 'YYYY-MM-DD HH24:MI:SS') as tp_date
+        FROM treatmentplan
         GROUP BY 1
     )
     SELECT * FROM (
       SELECT DISTINCT ON (l.email)
           l.email,
           l.supply_remaining_interval AS allowance,
-          l.created_at AS login_time,
-          o.last_order_at
+          TO_CHAR(l.created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Australia/Sydney', 'YYYY-MM-DD HH24:MI:SS') AS login_time,
+          o.last_order_at,
+          tp.tp_date
       FROM user_login_supply_tracking l
       LEFT JOIN last_orders o ON LOWER(l.email) = LOWER(o.email)
+      LEFT JOIN latest_tp tp ON REPLACE(LOWER(l.email), '[at]', '@') = LOWER(tp.email)
       CROSS JOIN config
       WHERE (l.created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Australia/Sydney')::date = config.target_date
         ${supplyCondition}
@@ -70,7 +79,9 @@ app.get('/api/patients', async (req, res) => {
     );
 
     // The gateway returns data in response.data.data based on the snippet
-    const rows = response.data?.data || [];
+    const rows = (response.data?.data || []).filter((r: any) => 
+      r.email?.toLowerCase().replace('[at]', '@').trim() !== 'paprika.test@valstas.com.au'
+    );
     res.json(rows);
   } catch (error: any) {
     console.error('Error fetching from Gateway:', error.response?.data || error.message);
@@ -153,7 +164,11 @@ app.get('/api/purchases', async (req, res) => {
           sydney_date: sydneyDate
         };
       })
-      .filter((order: any) => order.sydney_date === targetDateStr);
+      .filter((order: any) => {
+        const isTargetDate = order.sydney_date === targetDateStr;
+        const isTestUser = order.email?.toLowerCase() === 'paprika.test@valstas.com.au';
+        return isTargetDate && !isTestUser;
+      });
 
     // Remove duplicates (in case an order appeared in both fetches, though unlikely with Date filters)
     const uniquePurchases = Array.from(new Map(mappedPurchases.map(p => [p.number, p]) as any).values());
@@ -195,7 +210,9 @@ app.get('/api/funnel', async (req, res) => {
       headers: { 'Authorization': `Bearer ${AUTH_TOKEN}`, 'Content-Type': 'application/json' }
     });
 
-    const logins = response.data?.data || [];
+    const logins = (response.data?.data || []).filter((l: any) => 
+      l.email?.toLowerCase().replace('[at]', '@').trim() !== 'paprika.test@valstas.com.au'
+    );
 
     // Simulate behavioral data for the funnel
     // In production, this would query a PostHog export table or similar event log
@@ -320,7 +337,10 @@ app.get('/api/abandoned-carts', async (req, res) => {
       headers: { 'Authorization': `Bearer ${AUTH_TOKEN}`, 'Content-Type': 'application/json' }
     });
 
-    res.json(response.data?.data || []);
+    const carts = (response.data?.data || []).filter((c: any) => 
+      c.email?.toLowerCase().replace('[at]', '@').trim() !== 'paprika.test@valstas.com.au'
+    );
+    res.json(carts);
   } catch (error: any) {
     console.error('Error fetching abandoned carts:', error.message);
     res.json([
@@ -359,7 +379,9 @@ app.get('/api/daily-intent-audit', async (req, res) => {
       headers: { 'Authorization': `Bearer ${AUTH_TOKEN}`, 'Content-Type': 'application/json' }
     });
 
-    const logins = gatewayRes.data?.data || [];
+    const logins = (gatewayRes.data?.data || []).filter((l: any) => 
+      l.email?.toLowerCase().replace('[at]', '@').trim() !== 'paprika.test@valstas.com.au'
+    );
     const totalLogins = logins.length;
     const totalLoginsWithAllowance = logins.filter((l: any) => l.allowance > 0).length;
 
@@ -398,15 +420,16 @@ app.get('/api/daily-intent-audit', async (req, res) => {
       const order = edge.node;
       const createdUtc = new Date(order.created);
       const sydneyDate = formatTz(toZonedTime(createdUtc, 'Australia/Sydney'), 'yyyy-MM-dd');
+      const isTestUser = order.userEmail?.toLowerCase() === 'paprika.test@valstas.com.au';
 
-      if (sydneyDate === targetDateStr && order.paymentStatus === 'FULLY_CHARGED') {
+      if (sydneyDate === targetDateStr && order.paymentStatus === 'FULLY_CHARGED' && !isTestUser) {
         totalOrdersOnDate++;
       }
 
       const msDiff = targetDate.getTime() - new Date(sydneyDate).getTime();
       const daysDiff = msDiff / (1000 * 3600 * 24);
       
-      if (daysDiff >= 0 && daysDiff <= 7 && order.status !== 'FULFILLED') {
+      if (daysDiff >= 0 && daysDiff <= 7 && order.status !== 'FULFILLED' && !isTestUser) {
         if (order.userEmail) {
           unfulfilledEmails7Days.add(order.userEmail.toLowerCase());
         }

@@ -66,6 +66,7 @@ interface Patient {
   hasPurchased?: boolean;
   hasUnpaid?: boolean;
   last_order_at?: string;
+  tp_date?: string;
 }
 
 interface Purchase {
@@ -341,7 +342,7 @@ function App() {
     if (filteredData.length === 0) return;
 
     const headers = activeView === 'logins' 
-      ? ['Email', 'Allowance Remaining', 'Login Time', 'Purchased Today']
+      ? ['Email', 'Allowance Remaining', 'Last Order', 'TP Date', 'Login Time', 'Purchased Today']
       : activeView === 'funnel'
       ? ['Email', 'Viewed Product', 'Added to Cart', 'Removed from Cart', 'Checkout', 'Last Activity']
       : activeView === 'abandoned'
@@ -357,6 +358,8 @@ function App() {
           return [
             item.email,
             item.allowance,
+            item.last_order_at ? format(new Date(item.last_order_at), 'yyyy-MM-dd') : 'N/A',
+            item.tp_date ? format(new Date(item.tp_date), 'yyyy-MM-dd') : 'N/A',
             format(new Date(item.login_time), 'yyyy-MM-dd HH:mm:ss'),
             item.hasPurchased ? 'YES' : 'NO'
           ].join(',');
@@ -609,6 +612,14 @@ function App() {
             </div>
           </TableHead>
           <TableHead 
+            className="text-center cursor-pointer hover:bg-slate-100 transition-colors"
+            onClick={() => requestSort('tp_date')}
+          >
+            <div className="flex items-center justify-center">
+              TP Date <SortIcon columnKey="tp_date" />
+            </div>
+          </TableHead>
+          <TableHead 
             className="text-right cursor-pointer hover:bg-slate-100 transition-colors"
             onClick={() => requestSort('login_time')}
           >
@@ -655,8 +666,8 @@ function App() {
             <TableCell className="text-center">
               {patient.last_order_at ? (
                 <div className="flex flex-col items-center">
-                  <span className="text-xs font-bold text-slate-900">
-                    {new Date(patient.last_order_at).toLocaleDateString('en-AU', { day: '2-digit', month: 'short' })}
+                  <span className="text-sm font-medium text-slate-700 font-mono">
+                    {format(new Date(patient.last_order_at), 'dd MMM yyyy')}
                   </span>
                   <span className="text-[10px] text-slate-500 uppercase font-medium">
                     {formatDistanceToNow(new Date(patient.last_order_at), { addSuffix: true })}
@@ -666,7 +677,14 @@ function App() {
                 <span className="text-xs text-slate-400 italic font-medium">No Orders</span>
               )}
             </TableCell>
-            <TableCell className="text-right text-muted-foreground tabular-nums">
+            <TableCell className="text-center font-mono text-sm text-slate-500">
+              {patient.tp_date ? (
+                format(new Date(patient.tp_date), 'dd MMM yyyy')
+              ) : (
+                <span className="text-slate-300 italic text-[10px]">No TP Found</span>
+              )}
+            </TableCell>
+            <TableCell className="text-right font-mono text-sm text-slate-500">
               {safeFormatDate(patient.login_time)}
             </TableCell>
           </TableRow>
