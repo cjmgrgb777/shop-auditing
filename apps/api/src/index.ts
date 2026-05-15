@@ -622,10 +622,12 @@ app.get('/api/zoho-patient/:email', async (req, res) => {
 
     const contact = searchRes.data?.data?.[0];
     const patientDetails: any = {
+      ...contact, // Spread all Zoho fields
       id: contact?.id || null,
       name: contact?.Full_Name || `${contact?.First_Name || ''} ${contact?.Last_Name || ''}`.trim() || 'Not Found',
       email: contact?.Email || email,
       phone: contact?.Phone || 'N/A',
+      zohoStatus: contact?.Status || 'Active',
       zohoUrl: contact ? `https://crm.zoho.com.au/crm/org${ORG_ID}/tab/Contacts/${contact.id}` : null,
       replays: []
     };
