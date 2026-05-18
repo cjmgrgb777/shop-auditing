@@ -83,11 +83,20 @@ interface Purchase {
 
 interface FunnelEvent {
   email: string;
-  viewed_product: boolean;
-  added_to_cart: boolean;
-  removed_from_cart: boolean;
-  checkout: boolean;
   login_time: string;
+  sessionId: string | null;
+  furthestStage: string | null;
+  cartAdded: boolean;
+  checkoutInitiated: boolean;
+  paymentPageVisit: boolean;
+  paymentInitiated: boolean;
+  paymentSuccess: boolean;
+  paymentError: boolean;
+  purchaseCompleted: boolean;
+  hasError: boolean;
+  errorCount: number;
+  replayUrl: string | null;
+  lastActivity: string;
 }
 
 function App() {
@@ -109,6 +118,9 @@ function App() {
   const [yesterdayData, setYesterdayData] = useState<any[]>([]);
   const [historicalDistribution, setHistoricalDistribution] = useState<any[]>([]);
   const [dataCache, setDataCache] = useState<Record<string, any>>({});
+
+  // Live count (funnel view)
+  const [liveCount, setLiveCount] = useState<number | null>(null);
 
   // Customer details state
   const [selectedCustomer, setSelectedCustomer] = useState<any | null>(null);
@@ -360,7 +372,7 @@ function App() {
     const headers = activeView === 'logins'
       ? ['Email', 'Allowance Remaining', '# of Orders', 'Last Order', 'TP Date', 'Login Time', 'Purchased Today']
       : activeView === 'funnel'
-        ? ['Email', 'Viewed Product', 'Added to Cart', 'Removed from Cart', 'Checkout', 'Last Activity']
+        ? ['Email', 'Furthest Stage', 'Cart Added', 'Checkout', 'Payment Init', 'Outcome', 'Error Count', 'Replay URL', 'Last Activity']
         : activeView === 'abandoned'
           ? ['Email', 'Allowance Remaining', 'Cart Created (Sydney)']
           : activeView === 'intent'
@@ -381,13 +393,18 @@ function App() {
             item.hasPurchased ? 'YES' : 'NO'
           ].join(',');
         } else if (activeView === 'funnel') {
+          const outcome = item.purchaseCompleted || item.paymentSuccess ? 'success'
+            : item.paymentError ? 'error' : 'none';
           return [
             item.email,
-            item.viewed_product ? 'YES' : 'NO',
-            item.added_to_cart ? 'YES' : 'NO',
-            item.removed_from_cart ? 'YES' : 'NO',
-            item.checkout ? 'YES' : 'NO',
-            format(new Date(item.login_time), 'yyyy-MM-dd HH:mm:ss')
+            item.furthestStage || 'none',
+            item.cartAdded ? 'YES' : 'NO',
+            item.checkoutInitiated ? 'YES' : 'NO',
+            item.paymentInitiated ? 'YES' : 'NO',
+            outcome,
+            item.errorCount || 0,
+            item.replayUrl || '',
+            item.lastActivity ? format(new Date(item.lastActivity), 'yyyy-MM-dd HH:mm:ss') : ''
           ].join(',');
         } else if (activeView === 'abandoned') {
           return [
@@ -572,6 +589,20 @@ function App() {
   useEffect(() => {
     fetchData(activeView, date, loginTab, recoveryTab);
   }, [activeView, date, loginTab, recoveryTab]);
+
+  // Poll live count every 30s when on funnel view
+  useEffect(() => {
+    if (activeView !== 'funnel') return;
+    const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+    const fetchLiveCount = () => {
+      axios.get(`${apiUrl}/api/live-count`)
+        .then(r => setLiveCount(r.data?.count ?? 0))
+        .catch(() => {});
+    };
+    fetchLiveCount();
+    const interval = setInterval(fetchLiveCount, 60000);
+    return () => clearInterval(interval);
+  }, [activeView]);
 
   const SortIcon = ({ columnKey }: { columnKey: string }) => {
     if (sortConfig.key !== columnKey) return <ArrowUpDown size={14} className="ml-1 opacity-20" />;
@@ -797,60 +828,109 @@ function App() {
     </Table>
   );
 
+  const FUNNEL_STAGE_LABELS: Record<string, { label: string; color: string }> = {
+    cart_added:          { label: 'Cart Added',       color: 'bg-blue-100 text-blue-700' },
+    checkout_initiated:  { label: 'Checkout',         color: 'bg-indigo-100 text-indigo-700' },
+    payment_page_visit:  { label: 'Payment Page',     color: 'bg-violet-100 text-violet-700' },
+    payment_initiated:   { label: 'Payment Init',     color: 'bg-amber-100 text-amber-700' },
+    payment_error:       { label: 'Payment Error',    color: 'bg-red-100 text-red-700' },
+    payment_success:     { label: 'Payment Success',  color: 'bg-emerald-100 text-emerald-700' },
+    purchase_completed:  { label: 'Purchased',        color: 'bg-emerald-200 text-emerald-800' },
+  };
+
   const renderFunnelTable = () => (
     <Table>
       <TableHeader>
         <TableRow className="bg-slate-50/30">
           <TableHead
-            className="w-[300px] cursor-pointer hover:bg-slate-100 transition-colors"
+            className="w-[280px] cursor-pointer hover:bg-slate-100 transition-colors"
             onClick={() => requestSort('email')}
           >
             <div className="flex items-center">
               Patient Email <SortIcon columnKey="email" />
             </div>
           </TableHead>
-          <TableHead className="text-center">Viewed Product</TableHead>
-          <TableHead className="text-center">Added to Cart</TableHead>
-          <TableHead className="text-center">Removed</TableHead>
+          <TableHead
+            className="cursor-pointer hover:bg-slate-100 transition-colors"
+            onClick={() => requestSort('furthestStage')}
+          >
+            <div className="flex items-center">
+              Furthest Stage <SortIcon columnKey="furthestStage" />
+            </div>
+          </TableHead>
+          <TableHead className="text-center">Cart</TableHead>
           <TableHead className="text-center">Checkout</TableHead>
+          <TableHead className="text-center">Payment</TableHead>
+          <TableHead className="text-center">Outcome</TableHead>
+          <TableHead className="text-center">Errors</TableHead>
+          <TableHead className="text-center">Replay</TableHead>
           <TableHead
             className="text-right cursor-pointer hover:bg-slate-100 transition-colors"
-            onClick={() => requestSort('login_time')}
+            onClick={() => requestSort('lastActivity')}
           >
             <div className="flex items-center justify-end">
-              Last Activity <SortIcon columnKey="login_time" />
+              Last Activity <SortIcon columnKey="lastActivity" />
             </div>
           </TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
-        {filteredData.map((event: FunnelEvent, index) => (
-          <TableRow key={index} className="group transition-colors">
-            <TableCell className="font-mono text-sm text-slate-600 font-medium">
-              <div className="flex items-center gap-2">
-                <div className="h-8 w-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-500 group-hover:bg-orange-100 group-hover:text-orange-600 transition-colors">
-                  <User size={14} />
+        {filteredData.map((event: FunnelEvent, index) => {
+          const stageInfo = event.furthestStage ? FUNNEL_STAGE_LABELS[event.furthestStage] : null;
+          const outcome = event.purchaseCompleted || event.paymentSuccess
+            ? { label: 'Success', cls: 'bg-emerald-100 text-emerald-700' }
+            : event.paymentError
+              ? { label: 'Error', cls: 'bg-red-100 text-red-700' }
+              : null;
+          return (
+            <TableRow key={index} className="group transition-colors">
+              <TableCell className="font-mono text-sm text-slate-600 font-medium">
+                <div className="flex items-center gap-2">
+                  <div className="h-8 w-8 rounded-full bg-slate-100 flex items-center justify-center text-slate-500 group-hover:bg-orange-100 group-hover:text-orange-600 transition-colors shrink-0">
+                    <User size={14} />
+                  </div>
+                  {event.email}
                 </div>
-                {event.email}
-              </div>
-            </TableCell>
-            <TableCell className="text-center">
-              {event.viewed_product ? <Eye className="mx-auto text-blue-500" size={18} /> : <X className="mx-auto text-slate-200" size={18} />}
-            </TableCell>
-            <TableCell className="text-center">
-              {event.added_to_cart ? <PlusCircle className="mx-auto text-emerald-500" size={18} /> : <X className="mx-auto text-slate-200" size={18} />}
-            </TableCell>
-            <TableCell className="text-center">
-              {event.removed_from_cart ? <MinusCircle className="mx-auto text-orange-400" size={18} /> : <X className="mx-auto text-slate-200" size={18} />}
-            </TableCell>
-            <TableCell className="text-center">
-              {event.checkout ? <CreditCard className="mx-auto text-emerald-600" size={18} /> : <X className="mx-auto text-slate-200" size={18} />}
-            </TableCell>
-            <TableCell className="text-right text-muted-foreground tabular-nums">
-              {safeFormatDate(event.login_time)}
-            </TableCell>
-          </TableRow>
-        ))}
+              </TableCell>
+              <TableCell>
+                {stageInfo
+                  ? <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${stageInfo.color}`}>{stageInfo.label}</span>
+                  : <span className="text-xs text-slate-300">No activity</span>
+                }
+              </TableCell>
+              <TableCell className="text-center">
+                {event.cartAdded ? <PlusCircle className="mx-auto text-blue-500" size={16} /> : <X className="mx-auto text-slate-200" size={16} />}
+              </TableCell>
+              <TableCell className="text-center">
+                {event.checkoutInitiated ? <Check className="mx-auto text-indigo-500" size={16} /> : <X className="mx-auto text-slate-200" size={16} />}
+              </TableCell>
+              <TableCell className="text-center">
+                {event.paymentInitiated ? <CreditCard className="mx-auto text-violet-500" size={16} /> : <X className="mx-auto text-slate-200" size={16} />}
+              </TableCell>
+              <TableCell className="text-center">
+                {outcome
+                  ? <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${outcome.cls}`}>{outcome.label}</span>
+                  : <span className="text-xs text-slate-300">—</span>
+                }
+              </TableCell>
+              <TableCell className="text-center">
+                {event.hasError
+                  ? <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-bold bg-red-100 text-red-700">{event.errorCount}</span>
+                  : <X className="mx-auto text-slate-200" size={16} />
+                }
+              </TableCell>
+              <TableCell className="text-center">
+                {event.replayUrl
+                  ? <a href={event.replayUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1 text-xs font-medium text-indigo-600 hover:text-indigo-800 hover:underline">▶ Replay</a>
+                  : <span className="text-xs text-slate-300">—</span>
+                }
+              </TableCell>
+              <TableCell className="text-right text-muted-foreground tabular-nums text-xs">
+                {safeFormatDate(event.lastActivity || event.login_time)}
+              </TableCell>
+            </TableRow>
+          );
+        })}
       </TableBody>
     </Table>
   );
@@ -1062,32 +1142,32 @@ function App() {
                   <CardHeader className="pb-2">
                     <CardDescription className="text-orange-600 font-bold text-[10px] uppercase tracking-wider">Currently in Shop</CardDescription>
                     <CardTitle className="text-3xl font-black text-slate-900 flex items-center gap-2">
-                      {Math.floor(Math.random() * 12) + 4}
+                      {liveCount ?? '—'}
                       <span className="flex h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
                     </CardTitle>
                   </CardHeader>
                 </Card>
                 <Card className="bg-white border-blue-100 shadow-sm">
                   <CardHeader className="pb-2">
-                    <CardDescription className="text-blue-600 font-bold text-[10px] uppercase tracking-wider">Product Views</CardDescription>
+                    <CardDescription className="text-blue-600 font-bold text-[10px] uppercase tracking-wider">Cart Adds</CardDescription>
                     <CardTitle className="text-3xl font-black text-slate-900">
-                      {data.filter(i => i.viewed_product).length}
+                      {data.filter(i => i.cartAdded).length}
                     </CardTitle>
                   </CardHeader>
                 </Card>
                 <Card className="bg-white border-emerald-100 shadow-sm">
                   <CardHeader className="pb-2">
-                    <CardDescription className="text-emerald-600 font-bold text-[10px] uppercase tracking-wider">Add to Carts</CardDescription>
+                    <CardDescription className="text-emerald-600 font-bold text-[10px] uppercase tracking-wider">Checkouts Initiated</CardDescription>
                     <CardTitle className="text-3xl font-black text-slate-900">
-                      {data.filter(i => i.added_to_cart).length}
+                      {data.filter(i => i.checkoutInitiated).length}
                     </CardTitle>
                   </CardHeader>
                 </Card>
                 <Card className="bg-white border-purple-100 shadow-sm">
                   <CardHeader className="pb-2">
-                    <CardDescription className="text-purple-600 font-bold text-[10px] uppercase tracking-wider">Checkouts</CardDescription>
+                    <CardDescription className="text-purple-600 font-bold text-[10px] uppercase tracking-wider">Purchases Completed</CardDescription>
                     <CardTitle className="text-3xl font-black text-slate-900">
-                      {data.filter(i => i.checkout).length}
+                      {data.filter(i => i.purchaseCompleted).length}
                     </CardTitle>
                   </CardHeader>
                 </Card>

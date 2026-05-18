@@ -187,15 +187,43 @@ app.get('/api/purchases', async (req, res) => {
   }
 });
 
+// Simple server-side cache for live count (20s TTL)
+let liveCountCache: { count: number; users?: any[]; asOf: string } | null = null;
+let liveCountCacheTime = 0;
+
+// Simple server-side cache for funnel (60s TTL)
+const funnelCache = new Map<string, { data: any[]; time: number }>();
+
+const getFurthestStage = (row: any): string | null => {
+  if (row.purchaseCompleted) return 'purchase_completed';
+  if (row.paymentSuccess) return 'payment_success';
+  if (row.paymentError) return 'payment_error';
+  if (row.paymentInitiated) return 'payment_initiated';
+  if (row.paymentPageVisit) return 'payment_page_visit';
+  if (row.checkoutInitiated) return 'checkout_initiated';
+  if (row.cartAdded) return 'cart_added';
+  return null;
+};
+
 app.get('/api/funnel', async (req, res) => {
   const { date } = req.query;
-  const targetDate = date || new Date().toISOString().split('T')[0];
+  const targetDate = (date as string) || new Date().toISOString().split('T')[0];
+
+  const POSTHOG_API_KEY = process.env.POSTHOG_API_KEY;
+  const POSTHOG_PROJECT_ID = process.env.POSTHOG_PROJECT_ID;
+
+  // Serve from cache if < 60s old
+  const cached = funnelCache.get(targetDate);
+  if (cached && Date.now() - cached.time < 60000) {
+    return res.json(cached.data);
+  }
 
   try {
     if (!AUTH_TOKEN) throw new Error('AUTH_TOKEN not configured');
+    if (!POSTHOG_API_KEY || !POSTHOG_PROJECT_ID) throw new Error('PostHog credentials missing');
 
-    // Fetch logins for the day to use as a baseline for the funnel
-    const query = `
+    // 1. Fetch today's logins as baseline
+    const loginQuery = `
       SELECT DISTINCT ON (email)
           email,
           created_at AS login_time
@@ -204,36 +232,177 @@ app.get('/api/funnel', async (req, res) => {
       ORDER BY email, created_at DESC;
     `;
 
-    const response = await axios.post(GATEWAY_URL, {
+    const loginResponse = await axios.post(GATEWAY_URL, {
       req_method: 'GET',
-      query: query,
+      query: loginQuery,
       params: []
     }, {
       headers: { 'Authorization': `Bearer ${AUTH_TOKEN}`, 'Content-Type': 'application/json' }
     });
 
-    const logins = (response.data?.data || []).filter((l: any) => 
+    const logins = (loginResponse.data?.data || []).filter((l: any) =>
       l.email?.toLowerCase().replace('[at]', '@').trim() !== 'paprika.test@valstas.com.au'
     );
 
-    // Simulate behavioral data for the funnel
-    // In production, this would query a PostHog export table or similar event log
+    if (logins.length === 0) return res.json([]);
+
+    // 2. Batch HogQL query — one round trip for all patient emails
+    const cleanEmails = logins.map((l: any) =>
+      l.email.toLowerCase().replace('[at]', '@').trim()
+    );
+    const emailList = cleanEmails.map((e: string) => `'${e}'`).join(', ');
+
+    const hogql = `
+      SELECT
+        person.properties.email AS email,
+        properties.$session_id AS session_id,
+        maxIf(timestamp, event = 'cart_added')           AS t_cart_added,
+        maxIf(timestamp, event = 'checkout_initiated')   AS t_checkout_initiated,
+        maxIf(timestamp, event = 'payment_page_visit')   AS t_payment_page_visit,
+        maxIf(timestamp, event = 'payment_initiated')    AS t_payment_initiated,
+        maxIf(timestamp, event = 'payment_success')      AS t_payment_success,
+        maxIf(timestamp, event = 'payment_error')        AS t_payment_error,
+        maxIf(timestamp, event = 'purchase_completed')   AS t_purchase_completed,
+        countIf(event = 'payment_error')                 AS payment_error_count,
+        countIf(event = '$exception')                    AS exception_count,
+        max(timestamp)                                   AS last_activity
+      FROM events
+      WHERE toDate(timestamp) = '${targetDate}'
+        AND event IN ('cart_added', 'checkout_initiated', 'payment_page_visit',
+                      'payment_initiated', 'payment_success', 'payment_error',
+                      'purchase_completed', '$exception')
+        AND person.properties.email IN (${emailList})
+        AND (
+          (properties.$host = 'care.zenith.clinic' AND properties.$pathname LIKE '/patient%')
+          OR properties.$host = 'shop.harvest.delivery'
+          OR properties.$host = 'pay.zenith.clinic'
+        )
+      GROUP BY email, session_id
+      ORDER BY email, last_activity DESC
+    `;
+
+    const phRes = await axios.post(
+      `https://us.posthog.com/api/projects/${POSTHOG_PROJECT_ID}/query/`,
+      { query: { kind: 'HogQLQuery', query: hogql } },
+      { headers: { 'Authorization': `Bearer ${POSTHOG_API_KEY}`, 'Content-Type': 'application/json' }, timeout: 12000 }
+    );
+
+    // 3. Build email → best row map (latest session per email wins)
+    const phMap = new Map<string, any>();
+    for (const row of (phRes.data?.results || [])) {
+      const [email, session_id, t_cart_added, t_checkout_initiated, t_payment_page_visit,
+             t_payment_initiated, t_payment_success, t_payment_error, t_purchase_completed,
+             payment_error_count, exception_count, last_activity] = row;
+
+      const existing = phMap.get(email);
+      if (!existing || (last_activity && last_activity > existing.lastActivity)) {
+        phMap.set(email, {
+          sessionId: session_id,
+          cartAdded: !!t_cart_added,
+          checkoutInitiated: !!t_checkout_initiated,
+          paymentPageVisit: !!t_payment_page_visit,
+          paymentInitiated: !!t_payment_initiated,
+          paymentSuccess: !!t_payment_success,
+          paymentError: !!t_payment_error,
+          purchaseCompleted: !!t_purchase_completed,
+          hasError: (Number(payment_error_count) + Number(exception_count)) > 0,
+          errorCount: Number(payment_error_count) + Number(exception_count),
+          lastActivity: last_activity
+        });
+      }
+    }
+
+    // 4. Merge with login data
     const funnelData = logins.map((login: any) => {
-      const seed = login.email.length + new Date(login.login_time).getTime();
+      const cleanEmail = login.email.toLowerCase().replace('[at]', '@').trim();
+      const ph = phMap.get(cleanEmail) || {};
       return {
         email: login.email,
-        viewed_product: true, // Baseline: they logged into the shop
-        added_to_cart: seed % 3 !== 0,
-        removed_from_cart: seed % 7 === 0,
-        checkout: seed % 4 === 0,
-        login_time: login.login_time
+        login_time: login.login_time,
+        sessionId: ph.sessionId || null,
+        furthestStage: getFurthestStage(ph),
+        cartAdded: ph.cartAdded || false,
+        checkoutInitiated: ph.checkoutInitiated || false,
+        paymentPageVisit: ph.paymentPageVisit || false,
+        paymentInitiated: ph.paymentInitiated || false,
+        paymentSuccess: ph.paymentSuccess || false,
+        paymentError: ph.paymentError || false,
+        purchaseCompleted: ph.purchaseCompleted || false,
+        hasError: ph.hasError || false,
+        errorCount: ph.errorCount || 0,
+        replayUrl: ph.sessionId ? `https://us.posthog.com/replay/${ph.sessionId}` : null,
+        lastActivity: ph.lastActivity || login.login_time
       };
     });
 
+    funnelCache.set(targetDate, { data: funnelData, time: Date.now() });
     res.json(funnelData);
   } catch (error: any) {
-    console.error('Error fetching funnel data:', error.message);
+    console.error('Error fetching funnel data:', error.response?.data || error.message);
     res.json([]);
+  }
+});
+
+app.get('/api/live-count', async (req, res) => {
+  const POSTHOG_API_KEY = process.env.POSTHOG_API_KEY;
+  const POSTHOG_PROJECT_ID = process.env.POSTHOG_PROJECT_ID;
+
+  // 55s cache — keeps polling safely under PostHog's 120 req/hour limit
+  if (liveCountCache && Date.now() - liveCountCacheTime < 55000) {
+    return res.json(liveCountCache);
+  }
+
+  try {
+    if (!POSTHOG_API_KEY || !POSTHOG_PROJECT_ID) throw new Error('PostHog credentials missing');
+
+    // Known shop domains:
+    //   new shop: care.zenith.clinic  (under /patient path)
+    //   old shop: shop.harvest.delivery
+    //   payment:  pay.zenith.clinic
+    // Override via POSTHOG_SHOP_HOSTS env var (comma-separated hosts, no path filtering)
+    const shopHostFilter = process.env.POSTHOG_SHOP_HOSTS
+      ? `AND properties.$host IN (${process.env.POSTHOG_SHOP_HOSTS.split(',').map(h => `'${h.trim()}'`).join(', ')})`
+      : `AND (
+          (properties.$host = 'care.zenith.clinic' AND properties.$pathname LIKE '/patient%')
+          OR properties.$host = 'shop.harvest.delivery'
+          OR properties.$host = 'pay.zenith.clinic'
+        )`;
+
+    const hogql = `
+      SELECT
+        person.properties.email AS email,
+        max(timestamp) AS last_seen,
+        argMax(properties.$current_url, timestamp) AS current_url,
+        argMax(properties.$host, timestamp) AS host
+      FROM events
+      WHERE timestamp >= now() - INTERVAL 5 MINUTE
+        ${shopHostFilter}
+        AND person.properties.email IS NOT NULL
+        AND person.properties.email != ''
+      GROUP BY person_id, person.properties.email
+      ORDER BY last_seen DESC
+    `;
+
+    const phRes = await axios.post(
+      `https://us.posthog.com/api/projects/${POSTHOG_PROJECT_ID}/query/`,
+      { query: { kind: 'HogQLQuery', query: hogql } },
+      { headers: { 'Authorization': `Bearer ${POSTHOG_API_KEY}`, 'Content-Type': 'application/json' }, timeout: 8000 }
+    );
+
+    const rows = phRes.data?.results || [];
+    const users = rows.map((row: any) => ({
+      email: row[0],
+      lastSeen: row[1],
+      currentUrl: row[2],
+      host: row[3]
+    }));
+
+    liveCountCache = { count: users.length, users, asOf: new Date().toISOString() };
+    liveCountCacheTime = Date.now();
+    res.json(liveCountCache);
+  } catch (error: any) {
+    console.error('Error fetching live count:', error.message);
+    res.json({ count: liveCountCache?.count ?? 0, asOf: new Date().toISOString() });
   }
 });
 
