@@ -92,7 +92,7 @@ interface FunnelEvent {
 
 function App() {
   const [activeView, setActiveView] = useState<View>('home');
-  const [loginTab, setLoginTab] = useState<'all' | 'allowance'>('allowance');
+  const [loginTab, setLoginTab] = useState<'all' | 'allowance' | 'no-orders'>('allowance');
   const [recoveryTab, setRecoveryTab] = useState<'all' | 'allowance'>('all');
   const [purchaseTab, setPurchaseTab] = useState<'all' | 'paid' | 'unpaid'>('all');
   const [data, setData] = useState<any[]>([]);
@@ -117,7 +117,7 @@ function App() {
   const [unfulfilledModalEmails, setUnfulfilledModalEmails] = useState<string[]>([]);
   const [isUnfulfilledModalOpen, setIsUnfulfilledModalOpen] = useState(false);
 
-  const fetchData = async (view: View, targetDate: string, currentLoginTab: 'all' | 'allowance', currentRecoveryTab: 'all' | 'allowance') => {
+  const fetchData = async (view: View, targetDate: string, currentLoginTab: 'all' | 'allowance' | 'no-orders', currentRecoveryTab: 'all' | 'allowance') => {
     if (view === 'home') return;
 
     const cacheKey = `${view}-${targetDate}-${currentLoginTab}-${currentRecoveryTab}`;
@@ -259,6 +259,11 @@ function App() {
         item.email.toLowerCase().includes(query) ||
         (item.number && item.number.toString().includes(query))
       );
+    }
+
+    // Login no-orders filter
+    if (activeView === 'logins' && loginTab === 'no-orders') {
+      result = result.filter(item => !item.last_order_at && item.allowance > 0);
     }
 
     // Purchase specific filter
@@ -1430,6 +1435,14 @@ function App() {
                         className="text-xs h-8 px-3"
                       >
                         All Logins
+                      </Button>
+                      <Button
+                        variant={loginTab === 'no-orders' ? 'default' : 'ghost'}
+                        size="sm"
+                        onClick={() => setLoginTab('no-orders')}
+                        className="text-xs h-8 px-3"
+                      >
+                        No Orders
                       </Button>
                     </div>
                   ) : activeView === 'abandoned' ? (
