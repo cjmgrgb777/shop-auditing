@@ -468,6 +468,116 @@ app.get('/api/customer/:email', async (req, res) => {
   }
 });
 
+app.get('/api/purchases/weekday-comparison', async (req, res) => {
+  const timeZone = 'Australia/Sydney';
+  const SALEOR_URL = process.env.SALEOR_API_URL;
+  const SALEOR_TOKEN = process.env.SALEOR_AUTH_TOKEN;
+
+  try {
+    if (!SALEOR_URL || !SALEOR_TOKEN) throw new Error('Saleor credentials missing');
+
+    // Use current Sydney time to determine the cutoff hour and weekday
+    const nowSydney = toZonedTime(new Date(), timeZone);
+    const currentHour = nowSydney.getHours(); // e.g. 19 for 7:19 PM
+    // Window: 00:00 through end of current hour (00:00–19:59 if it's 7:19 PM)
+    const windowLabel = `00:00–${String(currentHour).padStart(2, '0')}:59`;
+
+    const WEEKDAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+    // Last 5 same-weekday dates: today, -7d, -14d, -21d, -28d
+    const compareDates = Array.from({ length: 5 }, (_, i) => {
+      const d = subDays(nowSydney, i * 7);
+      return formatTz(d, 'yyyy-MM-dd', { timeZone });
+    });
+
+    const orderQuery = `
+      query OrdersByDate($dateStart: Date, $dateEnd: Date, $after: String) {
+        orders(filter: {created: {gte: $dateStart, lte: $dateEnd}}, first: 100, after: $after) {
+          pageInfo { hasNextPage endCursor }
+          edges {
+            node {
+              userEmail
+              paymentStatus
+              total { gross { amount currency } }
+              created
+            }
+          }
+        }
+      }
+    `;
+
+    // Fetch all pages for a given date string using cursor pagination
+    const fetchAllOrders = async (dateStart: string, dateEnd: string): Promise<any[]> => {
+      const edges: any[] = [];
+      let cursor: string | null = null;
+      do {
+        const res: any = await axios.post(SALEOR_URL!, {
+          query: orderQuery,
+          variables: { dateStart, dateEnd, after: cursor }
+        }, { headers: { 'Authorization': `Bearer ${SALEOR_TOKEN}`, 'Content-Type': 'application/json' } });
+        const ordersData = res.data?.data?.orders;
+        if (!ordersData) break;
+        edges.push(...(ordersData.edges || []));
+        cursor = ordersData.pageInfo?.hasNextPage ? ordersData.pageInfo.endCursor : null;
+      } while (cursor);
+      return edges;
+    };
+
+    // Fetch each date (+ prev UTC day to cover Sydney window) in parallel
+    const results = await Promise.all(
+      compareDates.map(async (dateStr) => {
+        const prevStr = formatFull(subDays(new Date(dateStr), 1), 'yyyy-MM-dd');
+        const [edgesTarget, edgesPrev] = await Promise.all([
+          fetchAllOrders(dateStr, dateStr),
+          fetchAllOrders(prevStr, prevStr)
+        ]);
+
+        const allEdges = [...edgesTarget, ...edgesPrev];
+
+        let grossSales = 0;
+        let orderCount = 0;
+        let currency = 'AUD';
+
+        allEdges.forEach((edge: any) => {
+          const node = edge.node;
+          if (node.userEmail?.toLowerCase() === 'paprika.test@valstas.com.au') return;
+
+          const createdSydney = toZonedTime(new Date(node.created), timeZone);
+          const sydneyDate = formatTz(createdSydney, 'yyyy-MM-dd');
+          const sydneyHour = createdSydney.getHours();
+
+          if (sydneyDate !== dateStr || sydneyHour > currentHour) return;
+          if (node.paymentStatus !== 'FULLY_CHARGED') return;
+
+          grossSales += Number(node.total.gross.amount);
+          currency = node.total.gross.currency || currency;
+          orderCount++;
+        });
+
+        const dateObj = new Date(`${dateStr}T12:00:00`);
+        const isToday = dateStr === formatTz(nowSydney, 'yyyy-MM-dd', { timeZone });
+
+        return {
+          date: dateStr,
+          dayLabel: isToday
+            ? `Today (${WEEKDAY_NAMES[dateObj.getDay()]} ${formatFull(dateObj, 'd MMM')})`
+            : `${WEEKDAY_NAMES[dateObj.getDay()]} ${formatFull(dateObj, 'd MMM')}`,
+          isToday,
+          hourLabel: windowLabel,
+          grossSales,
+          currency,
+          orderCount
+        };
+      })
+    );
+
+    res.json({ currentHour, hourLabel: windowLabel, weekday: WEEKDAY_NAMES[nowSydney.getDay()], rows: results });
+  } catch (error: any) {
+    console.error('Error fetching weekday comparison:', error.message);
+    res.status(500).json({ error: 'Failed to fetch weekday comparison' });
+  }
+});
+
 app.get('/api/purchases/history', async (req, res) => {
   const { date } = req.query;
   const targetDateStr = (date as string) || new Date().toISOString().split('T')[0];

@@ -121,6 +121,7 @@ function App() {
 
   // Live count (funnel view)
   const [liveCount, setLiveCount] = useState<number | null>(null);
+  const [weekdayComparison, setWeekdayComparison] = useState<any | null>(null);
 
   // Customer details state
   const [selectedCustomer, setSelectedCustomer] = useState<any | null>(null);
@@ -234,6 +235,11 @@ function App() {
         setYesterdayTotal(yTotal);
         historyDistributionData = historyRes.data;
         setHistoricalDistribution(historyDistributionData);
+
+        // Fetch weekday comparison (fire-and-forget, non-blocking)
+        axios.get(`${apiUrl}/api/purchases/weekday-comparison`)
+          .then(r => setWeekdayComparison(r.data))
+          .catch(() => {});
 
         // Use history data to also update yesterdayTotal if needed, but let's keep current logic for now
       }
@@ -1243,6 +1249,51 @@ function App() {
                 </div>
               );
             })()}
+
+            {/* Weekday hourly comparison */}
+            {!loading && activeView === 'purchases' && weekdayComparison && (
+              <Card className="bg-white shadow-sm border-slate-200">
+                <CardHeader className="pb-3">
+                  <CardTitle className="text-sm font-bold flex items-center gap-2">
+                    <TrendingUp className="h-4 w-4 text-emerald-600" />
+                    Same-Hour Comparison — Last 5 {weekdayComparison.weekday}s
+                  </CardTitle>
+                  <CardDescription className="text-[10px]">
+                    Gross paid sales (FULLY_CHARGED) for the {weekdayComparison.hourLabel} window · Sydney time
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="p-0 pb-2">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b border-slate-100 bg-slate-50/50">
+                        <th className="text-left px-4 py-2 text-[10px] uppercase font-bold text-slate-500">Date</th>
+                        <th className="text-right px-4 py-2 text-[10px] uppercase font-bold text-slate-500">Gross Sales</th>
+                        <th className="text-right px-4 py-2 text-[10px] uppercase font-bold text-slate-500">Orders</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {weekdayComparison.rows.map((row: any, i: number) => (
+                        <tr key={i} className={cn(
+                          "border-b border-slate-50 last:border-0",
+                          row.isToday ? "bg-emerald-50/60" : "hover:bg-slate-50/50"
+                        )}>
+                          <td className="px-4 py-2.5 font-medium text-slate-700 flex items-center gap-2">
+                            {row.isToday && <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 inline-block" />}
+                            {row.dayLabel}
+                          </td>
+                          <td className="px-4 py-2.5 text-right font-bold font-mono text-slate-900">
+                            {row.orderCount > 0 ? `${row.currency} $${row.grossSales.toFixed(2)}` : <span className="text-slate-300 font-normal text-xs">—</span>}
+                          </td>
+                          <td className="px-4 py-2.5 text-right text-slate-500">
+                            {row.orderCount > 0 ? `${row.orderCount} order${row.orderCount !== 1 ? 's' : ''}` : <span className="text-slate-300 text-xs">—</span>}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </CardContent>
+              </Card>
+            )}
 
             {!loading && data.length > 0 && activeView === 'purchases' && (
               <div className="grid gap-6 md:grid-cols-3">
